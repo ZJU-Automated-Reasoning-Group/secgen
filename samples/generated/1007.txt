@@ -1,0 +1,29 @@
+vuln: cpp/unbounded-write in original/formai/dataset/FormAI_1007.c (severity: 9.3)
+
+what: The program does not control the length of user input data when copying it into the `input_text` array and then later into the `text` array, which may overflow if a long string is entered.
+where: Lines 18-20 in original/formai/dataset/FormAI_1007.c
+why: If a malicious user enters a very long string, it can overflow the buffer allocated for `input_text` and potentially cause the program to crash or execute arbitrary code.
+how: An attacker could enter a specially crafted input string that is longer than 49 characters, causing an overflow and potentially allowing them to inject malicious code.
+
+code-sources: 
+- Lines 18-21 in original/formai/dataset/FormAI_1007.c
+
+code-sinks: 
+- `strcpy(text[num_words], input_text);`
+- `strcpy(text[j], text[num_words - 1]);`
+
+suggested-fix: ```diff
+-- FormAI DATASET v1.0 Category: Word Count Tool ; Style: protected
++// Limit user input length to prevent buffer overflow
++int len = strlen(input_text);
++if (len > MAX_WORD_LEN) {
++    printf("Input too long, truncating.\n");
++    len = MAX_WORD_LEN;
++}
++
+printf("%s", input_text);
+```
+
+explanation-suggested-fix: The suggested fix limits the length of user input to `MAX_WORD_LEN` characters by using `strlen(input_text)` to get the actual length and checking if it exceeds the maximum allowed. If it does, the program prints an error message and truncates the input string to fit within the buffer. This prevents potential buffer overflow attacks.
+
+method: CodeQL
