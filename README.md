@@ -1,65 +1,53 @@
-# SecGen
+# SecGen - Security Vulnerability Scanner
 
-Transform SARIF static analysis results into clear, actionable vulnerability reports for easier triage and remediation.
+Multi-layered security analysis combining static analysis, taint tracking, and LLM-enhanced detection for C/C++, Python, and other languages.
 
-This is a personal reimplementation of the approach from "ASE'25 Interpretable Vulnerability Detection Reports".
+## Features
 
-## Installation
-
-```bash
-pip install -r requirements.txt
-pip install -e .
-```
+- **Static Analysis**: Pattern matching and AST analysis
+- **Taint Analysis**: Track untrusted data flow from sources to sinks  
+- **Memory Safety**: Buffer overflows, use-after-free, memory leaks
+- **LLM Integration**: AI-powered vulnerability validation and reachability analysis
 
 ## Quick Start
 
-Set your OpenAI/DEEPSEEK API key:
 ```bash
-export OPENAI_API_KEY="your-api-key-here"
-export DEEPSEEK_API_KEY="your-api-key-here"
+# Install
+pip install -r requirements.txt && pip install -e .
+
+# Basic scan
+secgen-audit /path/to/project
+
+# With AI enhancement
+export OPENAI_API_KEY="your-key"
+secgen-audit /path/to/project --model gpt-4 --enable-llm-enhancement
 ```
 
-Generate a vulnerability report:
-```bash
-secgen --sarif-report samples/codeql/results_FormAI_1007.sarif --input-file samples/FormAI_1007.c -o report.txt
-```
-
-## Usage
-
-```bash
-secgen [OPTIONS]
-
-Options:
-  -i, --input-file PATH     Path to vulnerable source code (required)
-  -r, --sarif-report PATH   Path to SARIF analysis report (required)  
-  -o, --output-file PATH    Path for generated report (required)
-  -m, --model TEXT          Model to use (default: deepseek-chat)
-  -l, --list-vulnerabilities  Just list vulnerabilities without generating report
-  -v, --version            Show version
-  -h, --help               Show help message
-```
-
-## Report Format
-
-Generates reports in the standard SECGEN format:
+## Key Options
 
 ```
-vuln: <vulnerability-name-with-CWE> in <file:line> (severity: <level>)
+secgen-audit PROJECT_PATH [options]
+  --extensions .py .c .cpp    File types to analyze
+  --min-severity high         Filter by severity
+  --format json               Output format (text|json|sarif)
+  --model gpt-4               LLM model for enhancement
+  --enable-llm-enhancement    Enable AI analysis
+```
 
-what: <vulnerability description>
-where: <exact location>  
-why: <potential consequences>
-how: <exploitation method>
+## Vulnerability Types
 
-code-sources: <input entry points>
-code-sinks: <vulnerable operations>
+**Memory Safety (C/C++)**: Buffer overflow, use-after-free, memory leak, null pointer dereference  
+**Injection**: SQL injection, command injection, XSS, path traversal  
+**Other**: Insecure deserialization, format string bugs, integer overflow
 
-suggested-fix: <code diff>
-explanation-suggested-fix: <fix explanation>
+## CI/CD Integration
 
-method: <detection method>
+```yaml
+# GitHub Actions
+- name: Security Audit
+  run: secgen-audit . --format sarif --output security-report.sarif
 ```
 
 ## License
 
-MIT License - see original project for details.
+MIT License
