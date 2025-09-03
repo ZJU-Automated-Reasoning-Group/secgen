@@ -29,50 +29,8 @@
       "type": "input",
       "safe_alternative": "use with field width",
       "description": "Input function that can cause buffer overflow without field width"
-    },
-    "malloc": {
-      "type": "allocation",
-      "requires": "null_check_and_free",
-      "description": "Memory allocation function requiring null check and proper deallocation"
-    },
-    "calloc": {
-      "type": "allocation",
-      "requires": "null_check_and_free",
-      "description": "Memory allocation function requiring null check and proper deallocation"
-    },
-    "realloc": {
-      "type": "allocation",
-      "requires": "null_check_and_free",
-      "description": "Memory reallocation function requiring null check and proper deallocation"
     }
   },
-  "format_functions": [
-    "printf",
-    "fprintf", 
-    "sprintf",
-    "snprintf",
-    "vprintf",
-    "vfprintf",
-    "vsprintf",
-    "vsnprintf"
-  ],
-  "memory_allocation_functions": [
-    "malloc",
-    "calloc",
-    "realloc",
-    "new"
-  ],
-  "memory_deallocation_functions": [
-    "free",
-    "delete"
-  ],
-  "null_check_patterns": [
-    "== NULL",
-    "!= NULL", 
-    "!",
-    "if (",
-    "while ("
-  ],
   "bounds_check_patterns": [
     "<",
     ">",
@@ -80,5 +38,27 @@
     ">=",
     "sizeof(",
     "strlen("
-  ]
+  ],
+  "detection_settings": {
+    "check_dangerous_functions": true,
+    "check_array_access": true,
+    "check_bounds_validation": true,
+    "confidence_threshold": 0.6
+  },
+  "patterns": {
+    "dangerous_function_patterns": [
+      "strcpy\\s*\\(",
+      "strcat\\s*\\(",
+      "sprintf\\s*\\(",
+      "gets\\s*\\(",
+      "scanf\\s*\\("
+    ],
+    "array_access_patterns": [
+      "(\\w+)\\s*\\[\\s*(\\w+)\\s*\\]"
+    ],
+    "bounds_check_patterns": [
+      "{index_var}\\s*<",
+      "sizeof\\({array_name}\\)"
+    ]
+  }
 }

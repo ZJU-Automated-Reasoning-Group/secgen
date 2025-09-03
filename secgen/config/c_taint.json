@@ -1,0 +1,100 @@
+{
+  "sources": {
+    "scanf": {
+      "type": "user_input",
+      "description": "User input from standard input"
+    },
+    "gets": {
+      "type": "user_input", 
+      "description": "User input from standard input (dangerous)"
+    },
+    "getchar": {
+      "type": "user_input",
+      "description": "Single character input from standard input"
+    },
+    "fgets": {
+      "type": "file_input",
+      "description": "File input function"
+    },
+    "getc": {
+      "type": "file_input",
+      "description": "Single character input from file"
+    },
+    "fread": {
+      "type": "file_input",
+      "description": "Binary file input function"
+    },
+    "recv": {
+      "type": "network_input",
+      "description": "Network socket receive function"
+    },
+    "recvfrom": {
+      "type": "network_input",
+      "description": "Network socket receive from specific address"
+    },
+    "getenv": {
+      "type": "environment",
+      "description": "Environment variable access"
+    },
+    "argv": {
+      "type": "command_line",
+      "description": "Command line arguments"
+    }
+  },
+  "sinks": {
+    "system": {
+      "type": "command_execution",
+      "description": "System command execution"
+    },
+    "popen": {
+      "type": "command_execution",
+      "description": "Process opening for command execution"
+    },
+    "execl": {
+      "type": "command_execution",
+      "description": "Execute program with argument list"
+    },
+    "execv": {
+      "type": "command_execution",
+      "description": "Execute program with argument vector"
+    },
+    "strcpy": {
+      "type": "buffer_operation",
+      "description": "String copy operation"
+    },
+    "strcat": {
+      "type": "buffer_operation",
+      "description": "String concatenation operation"
+    },
+    "sprintf": {
+      "type": "format_string",
+      "description": "String formatting operation"
+    },
+    "printf": {
+      "type": "format_string",
+      "description": "Print formatting operation"
+    },
+    "fprintf": {
+      "type": "format_string",
+      "description": "File print formatting operation"
+    },
+    "fopen": {
+      "type": "file_operation",
+      "description": "File opening operation"
+    },
+    "open": {
+      "type": "file_operation",
+      "description": "File opening operation (POSIX)"
+    }
+  },
+  "sanitizers": [
+    "strncpy",
+    "strncat", 
+    "snprintf",
+    "vsnprintf",
+    "escape",
+    "sanitize",
+    "validate",
+    "check"
+  ]
+}

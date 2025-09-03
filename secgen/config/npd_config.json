@@ -1,0 +1,36 @@
+{
+  "null_check_patterns": [
+    "== NULL",
+    "!= NULL", 
+    "!",
+    "if (",
+    "while ("
+  ],
+  "detection_settings": {
+    "track_allocations": true,
+    "check_null_assignments": true,
+    "interprocedural_analysis": true,
+    "confidence_threshold": 0.8
+  },
+  "patterns": {
+    "allocation_patterns": [
+      "(\\w+)\\s*=\\s*(malloc|calloc|realloc)\\s*\\(([^)]+)\\)"
+    ],
+    "null_assignment_patterns": [
+      "(\\w+)\\s*=\\s*NULL",
+      "(\\w+)->(\\w+)\\s*=\\s*NULL"
+    ],
+    "dereference_patterns": [
+      "\\*{var_name}",
+      "{var_name}\\s*\\[",
+      "{var_name}\\s*\\.",
+      "{var_name}\\s*\\->"
+    ],
+    "null_check_patterns": [
+      "if\\s*\\(\\s*{var_name}\\s*==\\s*NULL\\s*\\)",
+      "if\\s*\\(\\s*!{var_name}\\s*\\)",
+      "if\\s*\\(\\s*{var_name}\\s*!=\\s*NULL\\s*\\)",
+      "if\\s*\\(\\s*{var_name}\\s*\\)"
+    ]
+  }
+}
