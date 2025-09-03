@@ -1,6 +1,6 @@
 import json
 from typing import List
-from secgen.checker.vulnerability_detector import VulnerabilityDetector, AnalysisReport
+from secgen.checker import VulnerabilityDetector, AnalysisReport
 from secgen.core.models import Severity, VulnerabilityType
 
 

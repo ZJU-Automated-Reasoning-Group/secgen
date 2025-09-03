@@ -1,22 +1,18 @@
-"""Bug checkers for different languages and vulnerability types."""
+"""Unified vulnerability detection system with consolidated architecture."""
 
-from secgen.checker.base_checker import BaseChecker
-from secgen.checker.c_taint_checker import CTaintChecker
-from secgen.checker.python_taint_checker import PythonTaintChecker
-from secgen.checker.c_memory_checker import CMemoryChecker
-from secgen.checker.vulnerability_detector import VulnerabilityDetector
+from secgen.checker.report_generator import AnalysisReport
+from secgen.checker.cpp_checker import CppChecker
+from secgen.checker.file_analyzer_core import FileAnalyzerCore, DetectionContext
+from secgen.checker.project_analyzer import ProjectAnalyzer
 
-# Import the new detector architecture
-from secgen.checker.detectors import DetectorFactory
-from secgen.checker.detectors.base_detector import BaseVulnerabilityDetector
-
+# Legacy compatibility - VulnerabilityDetector is now just an alias
+VulnerabilityDetector = FileAnalyzerCore
 
 __all__ = [
-    'BaseChecker',
-    'CTaintChecker', 
-    'PythonTaintChecker',
-    'CMemoryChecker',
-    'VulnerabilityDetector',
-    'DetectorFactory',
-    'BaseVulnerabilityDetector'
+    'FileAnalyzerCore',
+    'ProjectAnalyzer', 
+    'CppChecker',
+    'DetectionContext',
+    'VulnerabilityDetector',  # Legacy compatibility
+    'AnalysisReport',
 ]

@@ -44,7 +44,8 @@ class ConfigLoader:
     
     def get_memory_config(self) -> Dict[str, Any]:
         """Load memory-related configuration."""
-        return self.load_config("mem")
+        # Memory detectors now use hardcoded configurations
+        return {}
     
 
     def get_c_taint_config(self) -> Dict[str, Any]:
@@ -94,19 +95,23 @@ def load_detector_config(detector_name: str) -> Dict[str, Any]:
     """
     config_loader = get_config_loader()
     
-    # Try to load specific detector config file
-    try:
-        return config_loader.load_config(f"{detector_name}_config")
-    except FileNotFoundError:
-        # Fallback to general config files
-        if detector_name in ['uaf', 'npd', 'memory_leak', 'double_free']:
-            return config_loader.get_memory_config()
-        elif detector_name in ['buffer_overflow', 'format_string', 'integer_overflow']:
-            return config_loader.get_memory_config()
-        elif detector_name in ['taint']:
-            return config_loader.get_taint_config()
-        else:
+    # Memory-related detectors now use hardcoded configurations
+    if detector_name in ['uaf', 'npd', 'memory_leak', 'double_free', 'buffer_overflow', 'format_string', 'integer_overflow']:
+        return {}
+    
+    # Taint analysis detectors still use configuration files
+    if detector_name in ['taint', 'c_taint']:
+        try:
+            return config_loader.get_c_taint_config()
+        except FileNotFoundError:
             return {}
+    elif detector_name == 'python_taint':
+        try:
+            return config_loader.get_python_taint_config()
+        except FileNotFoundError:
+            return {}
+    
+    return {}
 
 
 def get_detector_configs() -> Dict[str, Dict[str, Any]]:
@@ -119,32 +124,25 @@ def get_detector_configs() -> Dict[str, Dict[str, Any]]:
     
     detector_configs = {}
     
-    # Memory-related detectors
-    memory_config = config_loader.get_memory_config()
-    detector_configs['uaf'] = memory_config
-    detector_configs['npd'] = memory_config
-    detector_configs['memory_leak'] = memory_config
-    detector_configs['double_free'] = memory_config
-    detector_configs['buffer_overflow'] = memory_config
-    detector_configs['format_string'] = memory_config
-    detector_configs['integer_overflow'] = memory_config
-    
-    # Taint analysis detectors
-    taint_config = config_loader.get_taint_config()
-    detector_configs['taint'] = taint_config
+    # Memory-related detectors now use hardcoded configurations
+    memory_detectors = ['uaf', 'npd', 'memory_leak', 'double_free', 'buffer_overflow', 'format_string', 'integer_overflow']
+    for detector in memory_detectors:
+        detector_configs[detector] = {}
     
     # C/C++ specific taint
     try:
         c_taint_config = config_loader.get_c_taint_config()
         detector_configs['c_taint'] = c_taint_config
+        detector_configs['taint'] = c_taint_config  # Fallback for generic taint
     except FileNotFoundError:
-        detector_configs['c_taint'] = taint_config
+        detector_configs['c_taint'] = {}
+        detector_configs['taint'] = {}
     
     # Python specific taint
     try:
         python_taint_config = config_loader.get_python_taint_config()
         detector_configs['python_taint'] = python_taint_config
     except FileNotFoundError:
-        detector_configs['python_taint'] = taint_config
+        detector_configs['python_taint'] = {}
     
     return detector_configs

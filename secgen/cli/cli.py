@@ -8,28 +8,31 @@ from typing import List, Optional
 
 from secgen.core.models import VulnerabilityType
 from secgen.agent.models import OpenAIServerModel
-from secgen.reports.report_process import VulnerabilityDetector, AnalysisReport, convert_severity, convert_vuln_types, format_output, list_vulnerability_types
+from secgen.checker import VulnerabilityDetector, AnalysisReport
+from secgen.reports.report_process import convert_severity, convert_vuln_types, format_output, list_vulnerability_types
 from secgen.agent.minotor import AgentLogger, LogLevel
 
 
 def create_parser() -> argparse.ArgumentParser:
     """Create command line argument parser."""
     parser = argparse.ArgumentParser(
-        description="Code Quality Audit Agent - Comprehensive security vulnerability scanner",
+        description="Security vulnerability scanner",
         epilog="""Examples:
-  secgen-audit .                                    # Analyze current directory
-  secgen-audit /path/to/project --min-severity high # High severity only
-  secgen-audit /path/to/project -o report.json -f json # Export to JSON
-  secgen-audit /path/to/project --extensions .c .cpp .h # C/C++ only
-  secgen-audit /path/to/project --model gpt-4 --api-key KEY # Use LLM"""
+  secgen-audit . --detectors uaf,npd,bof
+  secgen-audit file.c -o report.json -f json
+  secgen-audit . --min-severity high --disable-memory"""
     )
     
     # Core arguments
-    parser.add_argument("project_path", help="Path to the project directory to analyze")
+    parser.add_argument("project_path", help="Project directory or file to analyze")
     parser.add_argument("--extensions", nargs="+", default=[".py", ".c", ".cpp", ".h", ".hpp", ".java", ".js", ".ts"], help="File extensions to analyze")
     parser.add_argument("--exclude", nargs="+", default=["__pycache__", ".git", "node_modules", "vendor"], help="Patterns to exclude")
     parser.add_argument("--min-severity", choices=["info", "low", "medium", "high", "critical"], default="low", help="Minimum severity level")
     parser.add_argument("--min-confidence", type=float, default=0.0, metavar="0.0-1.0", help="Minimum confidence threshold")
+    
+    # Detector selection
+    available_detectors = ["uaf", "npd", "bof", "mlk", "df", "fs", "io", "taint", "sql", "cmd", "xss", "path"]
+    parser.add_argument("--detectors", help=f"Comma-separated detectors to enable: {', '.join(available_detectors)}")
     parser.add_argument("--vuln-types", nargs="+", choices=[vt.value for vt in VulnerabilityType], help="Specific vulnerability types")
     
     # Output options
@@ -56,6 +59,39 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list-vuln-types", action="store_true", help="List all available vulnerability types and exit")
     
     return parser
+
+
+def parse_detectors(detector_string: str) -> List[VulnerabilityType]:
+    """Parse detector string and return corresponding vulnerability types."""
+    if not detector_string:
+        return []
+    
+    # Mapping from short detector names to vulnerability types
+    detector_map = {
+        "uaf": VulnerabilityType.USE_AFTER_FREE,
+        "npd": VulnerabilityType.NULL_POINTER_DEREF,
+        "bof": VulnerabilityType.BUFFER_OVERFLOW,
+        "mlk": VulnerabilityType.MEMORY_LEAK,
+        "df": VulnerabilityType.USE_AFTER_FREE,  # Double free is a type of UAF
+        "fs": VulnerabilityType.BUFFER_OVERFLOW,  # Format string is a type of buffer overflow
+        "io": VulnerabilityType.INTEGER_OVERFLOW,
+        "taint": VulnerabilityType.COMMAND_INJECTION,  # Generic taint analysis
+        "sql": VulnerabilityType.SQL_INJECTION,
+        "cmd": VulnerabilityType.COMMAND_INJECTION,
+        "xss": VulnerabilityType.XSS,
+        "path": VulnerabilityType.PATH_TRAVERSAL,
+    }
+    
+    detectors = [d.strip().lower() for d in detector_string.split(",")]
+    vuln_types = []
+    
+    for detector in detectors:
+        if detector in detector_map:
+            vuln_types.append(detector_map[detector])
+        else:
+            raise ValueError(f"Unknown detector: {detector}. Available: {', '.join(detector_map.keys())}")
+    
+    return vuln_types
 
 
 def setup_logging(args) -> AgentLogger:
@@ -99,11 +135,14 @@ async def main():
     # Validate project path
     project_path = Path(args.project_path)
     if not project_path.exists():
-        logger.log(f"Error: Project path does not exist: {project_path}", level=LogLevel.ERROR)
+        logger.log(f"Error: Path does not exist: {project_path}", level=LogLevel.ERROR)
         return 1
     
-    if not project_path.is_dir():
-        logger.log(f"Error: Project path is not a directory: {project_path}", level=LogLevel.ERROR)
+    is_single_file = project_path.is_file()
+    is_directory = project_path.is_dir()
+    
+    if not is_single_file and not is_directory:
+        logger.log(f"Error: Path is neither a file nor a directory: {project_path}", level=LogLevel.ERROR)
         return 1
     
     # Setup model if requested
@@ -117,29 +156,60 @@ async def main():
         'enable_llm_enhancement': args.enable_llm_enhancement
     }
     
-    detector = VulnerabilityDetector(model=model, logger=logger, config=config)
+    detector = VulnerabilityDetector(config=config, logger=logger)
     
     try:
-        # Perform analysis
-        logger.log(f"Starting analysis of {project_path}")
-        start_time = time.time()
+        # Handle detector selection
+        enabled_detectors = None
+        if args.detectors:
+            try:
+                enabled_detectors = parse_detectors(args.detectors)
+            except ValueError as e:
+                logger.log(f"Error: {e}", level=LogLevel.ERROR)
+                return 1
         
-        report = detector.analyze_project(
-            str(project_path),
-            file_extensions=args.extensions,
-            exclude_patterns=args.exclude
-        )
+        # Perform analysis
+        if is_single_file:
+            logger.log(f"Starting analysis of single file: {project_path}")
+            report = detector.analyze_single_file(str(project_path), enabled_detectors)
+        else:
+            logger.log(f"Starting analysis of directory: {project_path}")
+            # Use ProjectAnalyzer for directory analysis
+            from secgen.checker import ProjectAnalyzer
+            project_analyzer = ProjectAnalyzer(config=config, logger=logger, model=model)
+            report = project_analyzer.analyze_directory(
+                str(project_path),
+                file_extensions=args.extensions,
+                exclude_patterns=args.exclude,
+                enabled_types=enabled_detectors
+            )
         
         # Apply filters
         min_severity = convert_severity(args.min_severity)
-        vuln_types = convert_vuln_types(args.vuln_types) if args.vuln_types else None
         
-        filtered_vulnerabilities = detector.filter_vulnerabilities(
-            report.vulnerabilities,
-            min_severity=min_severity,
-            min_confidence=args.min_confidence,
-            vuln_types=vuln_types
-        )
+        # Handle additional vulnerability type filtering
+        if args.vuln_types:
+            explicit_vuln_types = convert_vuln_types(args.vuln_types)
+            if enabled_detectors:
+                vuln_types = list(set(enabled_detectors + explicit_vuln_types))
+            else:
+                vuln_types = explicit_vuln_types
+        else:
+            vuln_types = enabled_detectors
+        
+        # Filter vulnerabilities manually
+        filtered_vulnerabilities = []
+        for vuln in report.vulnerabilities:
+            # Apply severity filter
+            if hasattr(vuln, 'severity') and vuln.severity.value < min_severity.value:
+                continue
+            # Apply confidence filter
+            if hasattr(vuln, 'confidence') and vuln.confidence < args.min_confidence:
+                continue
+            # Apply vulnerability type filter
+            if vuln_types and hasattr(vuln, 'vuln_type') and vuln.vuln_type not in vuln_types:
+                continue
+            filtered_vulnerabilities.append(vuln)
         
         # Update report with filtered vulnerabilities
         report.vulnerabilities = filtered_vulnerabilities
@@ -147,9 +217,8 @@ async def main():
         
         # Enhance with LLM if requested
         if args.enable_llm_enhancement and model:
-            logger.log("Enhancing analysis with LLM...")
-            enhanced_vulns = await detector.enhance_with_llm_analysis(filtered_vulnerabilities)
-            report.vulnerabilities = enhanced_vulns
+            logger.log("LLM enhancement not yet implemented in FileAnalyzerCore")
+            # TODO: Implement LLM enhancement
         
         # Format output
         output = format_output(report, detector, args.format)
