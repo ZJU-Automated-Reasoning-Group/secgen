@@ -1,395 +1,497 @@
-"""Interprocedural analysis for cross-function vulnerability detection."""
+"""Interprocedural analyzer integrating all new components.
 
-from typing import Dict, List, Set, Tuple, Optional, Any
+This module provides the main interprocedural analyzer that integrates
+lightweight alias analysis, function summaries, hybrid taint propagation,
+and specialized LLM tools.
+"""
 
-from secgen.core.models import FunctionInfo, Vulnerability, VulnerabilityType, Severity, CodeLocation, PathStep, VulnerabilityPath
-from secgen.core.function_summary import FunctionSummaryGenerator, FunctionSummary, ParameterEffect, TaintEffect
-from secgen.ir import CallGraphBuilder, DataFlowGraphBuilder, TaintPath, DataFlowNode
+from typing import Dict, List, Set, Optional, Any, Tuple
+from dataclasses import dataclass, field
+
+from .summary import FunctionSummary
+from .alias_analyzer import LightweightAliasAnalyzer
+from .hybrid_taint_analyzer import HybridTaintAnalyzer, TaintPath, TaintPropagationResult
+from .llm_tools import LLMToolsManager, TaintAnalysisInput, PathAnalysisInput
+from .models import FunctionInfo, Vulnerability, VulnerabilityType, Severity, CodeLocation
+from secgen.ir import CallGraphBuilder, DataFlowGraphBuilder
+
+
+@dataclass
+class AnalysisResult:
+    """Result of interprocedural analysis."""
+    vulnerabilities: List[Vulnerability] = field(default_factory=list)
+    taint_paths: List[TaintPath] = field(default_factory=list)
+    function_summaries: Dict[str, FunctionSummary] = field(default_factory=dict)
+    analysis_statistics: Dict[str, Any] = field(default_factory=dict)
+    llm_usage_stats: Dict[str, Any] = field(default_factory=dict)
 
 
 class InterproceduralAnalyzer:
-    """Performs interprocedural analysis for vulnerability detection."""
+    """Interprocedural analyzer with hybrid approach."""
     
-    def __init__(self, model=None, logger=None):
+    def __init__(self, model=None, logger=None, max_workers: int = 3):
         """Initialize interprocedural analyzer.
         
         Args:
-            model: LLM model for intelligent analysis
+            model: LLM model for analysis
             logger: Logger instance
+            max_workers: Maximum number of parallel workers
         """
         self.model = model
         self.logger = logger
-        self.functions: Dict[str, FunctionInfo] = {}
+        self.max_workers = max_workers
         
-        # IR builders
+        # Core components
+        self.functions: Dict[str, FunctionInfo] = {}
+        self.function_summaries: Dict[str, FunctionSummary] = {}
+        
+        # Analysis components
+        self.alias_analyzer = LightweightAliasAnalyzer(logger)
         self.call_graph_builder = CallGraphBuilder(logger)
         self.data_flow_builder = DataFlowGraphBuilder(logger)
         
-        # Function summary generator for interprocedural analysis
-        self.summary_generator = FunctionSummaryGenerator(model, logger)
-        self.function_summaries: Dict[str, FunctionSummary] = {}
-    
-
-    
-    def build_call_graph(self, functions: Dict[str, FunctionInfo]):
-        """Build interprocedural call graph.
+        # LLM tools
+        self.llm_tools_manager = LLMToolsManager(model, logger) if model else None
+        self.hybrid_taint_analyzer = HybridTaintAnalyzer(
+            llm_tools=self.llm_tools_manager.tools if self.llm_tools_manager else None,
+            logger=logger
+        )
         
-        Args:
-            functions: Dictionary of function information
-            
-        Returns:
-            NetworkX directed graph representing call relationships
-        """
-        self.functions = functions
-        return self.call_graph_builder.build_call_graph(functions)
+        # Analysis state
+        self.analysis_cache: Dict[str, Any] = {}
     
-    def build_function_summaries(self, functions: Dict[str, FunctionInfo], 
-                                file_contents: Dict[str, str]) -> Dict[str, FunctionSummary]:
-        """Build function summaries for interprocedural analysis.
+    def analyze_project(self, functions: Dict[str, FunctionInfo], 
+                       file_contents: Dict[str, str]) -> AnalysisResult:
+        """Perform comprehensive interprocedural analysis.
         
         Args:
             functions: Dictionary of function information
             file_contents: Dictionary mapping file paths to content
             
         Returns:
-            Dictionary of function summaries
+            Analysis result
         """
         if self.logger:
-            self.logger.log("Building function summaries for interprocedural analysis...")
+            self.logger.log("Starting interprocedural analysis...")
         
-        self.function_summaries = self.summary_generator.compute_summary_for_call_graph(
-            functions, file_contents
+        self.functions = functions
+        
+        # Step 1: Build call graph
+        call_graph = self._build_call_graph()
+        
+        # Step 2: Generate function summaries
+        self._generate_summaries(file_contents)
+        
+        # Step 3: Perform hybrid taint analysis
+        taint_paths = self._perform_hybrid_taint_analysis()
+        
+        # Step 4: Detect vulnerabilities
+        vulnerabilities = self._detect_vulnerabilities(taint_paths)
+        
+        # Step 5: Generate analysis statistics
+        analysis_stats = self._generate_analysis_statistics()
+        llm_stats = self._generate_llm_usage_statistics()
+        
+        result = AnalysisResult(
+            vulnerabilities=vulnerabilities,
+            taint_paths=taint_paths,
+            function_summaries=self.function_summaries,
+            analysis_statistics=analysis_stats,
+            llm_usage_stats=llm_stats
         )
         
         if self.logger:
-            self.logger.log(f"Generated {len(self.function_summaries)} function summaries")
+            self.logger.log(f"Analysis complete. Found {len(vulnerabilities)} vulnerabilities.")
         
-        return self.function_summaries
+        return result
     
-    def find_reachable_functions(self, start_function: str) -> Set[str]:
-        """Find all functions reachable from a starting function.
+    def _build_call_graph(self):
+        """Build interprocedural call graph."""
+        if self.logger:
+            self.logger.log("Building call graph...")
         
-        Args:
-            start_function: Starting function identifier
-            
-        Returns:
-            Set of reachable function identifiers
-        """
-        return self.call_graph_builder.find_reachable_functions(start_function)
-    
-    def find_call_paths(self, source_func: str, target_func: str) -> List[List[str]]:
-        """Find all call paths between two functions.
-        
-        Args:
-            source_func: Source function identifier
-            target_func: Target function identifier
-            
-        Returns:
-            List of call paths (each path is a list of function identifiers)
-        """
-        return self.call_graph_builder.find_call_paths(source_func, target_func)
-    
-    def get_functions_calling(self, function_id: str) -> List[str]:
-        """Get all functions that call a specific function.
-        
-        Args:
-            function_id: Function identifier
-            
-        Returns:
-            List of function identifiers that call this function
-        """
-        return self.call_graph_builder.get_functions_calling(function_id)
-    
-    def get_functions_called_by(self, function_id: str) -> List[str]:
-        """Get all functions called by a specific function.
-        
-        Args:
-            function_id: Function identifier
-            
-        Returns:
-            List of function identifiers called by this function
-        """
-        return self.call_graph_builder.get_functions_called_by(function_id)
-    
-    def analyze_interprocedural_taint_flow(self) -> List[TaintPath]:
-        """Analyze taint flow using function summaries (IDFS-style).
-        
-        Returns:
-            List of interprocedural taint paths
-        """
-        taint_paths = []
-        
-        if not self.function_summaries:
-            if self.logger:
-                self.logger.log("No function summaries available for interprocedural taint analysis")
-            return taint_paths
-        
-        # Find entry points (functions that introduce taint)
-        taint_sources = self._find_taint_source_functions()
-        
-        # Find sinks (functions that use tainted data dangerously)
-        taint_sinks = self._find_taint_sink_functions()
-        
-        # Trace taint flow through call graph
-        for source_func in taint_sources:
-            for sink_func in taint_sinks:
-                paths = self._trace_taint_through_call_graph(source_func, sink_func)
-                taint_paths.extend(paths)
+        call_graph = self.call_graph_builder.build_call_graph(self.functions)
         
         if self.logger:
-            self.logger.log(f"Found {len(taint_paths)} interprocedural taint paths")
+            self.logger.log(f"Call graph built with {call_graph.number_of_nodes()} nodes and {call_graph.number_of_edges()} edges")
+        
+        return call_graph
+    
+    def _generate_summaries(self, file_contents: Dict[str, str]):
+        """Generate function summaries."""
+        if self.logger:
+            self.logger.log("Generating function summaries...")
+        
+        for func_key, func_info in self.functions.items():
+            if func_info.file_path in file_contents:
+                summary = self._generate_single_summary(func_info, file_contents[func_info.file_path])
+                self.function_summaries[func_key] = summary
+        
+        if self.logger:
+            self.logger.log(f"Generated {len(self.function_summaries)} summaries")
+    
+    def _generate_single_summary(self, func_info: FunctionInfo, content: str) -> FunctionSummary:
+        """Generate summary for a single function."""
+        
+        # Step 1: Perform alias analysis
+        alias_dict = self.alias_analyzer.analyze_function(func_info, content)
+        
+        # Step 2: Generate basic summary
+        summary = self._create_basic_summary(func_info, alias_dict)
+        
+        # Step 3: Enhance with LLM if available
+        if self.llm_tools_manager:
+            summary = self._enhance_summary_with_llm(summary, func_info, content)
+        
+        return summary
+    
+    def _create_basic_summary(self, func_info: FunctionInfo, alias_dict: Dict[str, Set[str]]) -> FunctionSummary:
+        """Create basic summary from static analysis."""
+        
+        from .summary import (
+            ParameterSummary, ReturnValueSummary, SideEffect,
+            CallSiteSummary, AliasSummary, TaintFlowSummary,
+            TaintPropagationType, SideEffectType, MemoryOperationType
+        )
+        
+        # Create parameter summaries
+        parameters = []
+        for i, param_name in enumerate(func_info.parameters):
+            param_summary = ParameterSummary(
+                index=i,
+                name=param_name,
+                aliases=alias_dict.get(param_name, set()),
+                alias_confidence=0.8 if param_name in alias_dict else 0.0,
+                taint_propagation=TaintPropagationType.NO_EFFECT,  # Will be enhanced later
+                taint_confidence=0.5
+            )
+            parameters.append(param_summary)
+        
+        # Create return value summary
+        return_value = ReturnValueSummary(
+            type=func_info.return_type or "unknown",
+            can_be_null=True,  # Conservative assumption
+            is_allocation=False  # Will be enhanced later
+        )
+        
+        # Analyze side effects from function calls
+        side_effects = []
+        memory_operations = []
+        
+        for call_name in func_info.calls:
+            if call_name in ['malloc', 'calloc', 'realloc']:
+                memory_operations.append(MemoryOperationType.ALLOCATION)
+                side_effects.append(SideEffect(
+                    effect_type=SideEffectType.MEMORY_OPERATION,
+                    description=f"Calls {call_name}",
+                    is_dangerous=False,
+                    confidence=1.0
+                ))
+            elif call_name == 'free':
+                memory_operations.append(MemoryOperationType.DEALLOCATION)
+                side_effects.append(SideEffect(
+                    effect_type=SideEffectType.MEMORY_OPERATION,
+                    description="Calls free",
+                    is_dangerous=True,
+                    risk_level=3,
+                    confidence=1.0
+                ))
+            elif call_name in ['system', 'exec', 'popen']:
+                side_effects.append(SideEffect(
+                    effect_type=SideEffectType.SYSTEM_CALL,
+                    description=f"Calls {call_name}",
+                    is_dangerous=True,
+                    risk_level=5,
+                    confidence=1.0
+                ))
+        
+        # Create alias summary
+        alias_summary = AliasSummary(
+            internal_aliases=alias_dict,
+            parameter_aliases={i: alias_dict.get(param, set()) for i, param in enumerate(func_info.parameters)},
+            alias_confidence={var: 0.8 for var in alias_dict.keys()}
+        )
+        
+        # Create taint flow summary
+        taint_flow = TaintFlowSummary()
+        
+        # Create call site summaries
+        call_sites = []
+        for call_name in func_info.calls:
+            call_site = CallSiteSummary(
+                callee_name=call_name,
+                line_number=0,  # Would need more sophisticated parsing
+                confidence=0.8
+            )
+            call_sites.append(call_site)
+        
+        # Create summary
+        summary = FunctionSummary(
+            function_name=func_info.name,
+            file_path=func_info.file_path,
+            start_line=func_info.start_line,
+            end_line=func_info.end_line,
+            parameters=parameters,
+            return_value=return_value,
+            side_effects=side_effects,
+            call_sites=call_sites,
+            alias_summary=alias_summary,
+            taint_flow=taint_flow,
+            memory_operations=memory_operations,
+            allocates_memory=MemoryOperationType.ALLOCATION in memory_operations,
+            frees_memory=MemoryOperationType.DEALLOCATION in memory_operations,
+            memory_safe=not any(op in memory_operations for op in [MemoryOperationType.ALLOCATION, MemoryOperationType.DEALLOCATION]),
+            security_sensitive=any(effect.is_dangerous for effect in side_effects),
+            complexity_score=self._calculate_complexity_score(func_info),
+            analysis_confidence=0.7,
+            analysis_method="static"
+        )
+        
+        return summary
+    
+    def _enhance_summary_with_llm(self, summary: FunctionSummary, 
+                                 func_info: FunctionInfo, content: str) -> FunctionSummary:
+        """Enhance summary using LLM."""
+        
+        if not self.llm_tools_manager:
+            return summary
+        
+        try:
+            # Extract function code
+            lines = content.split('\n')
+            func_lines = lines[func_info.start_line-1:func_info.end_line]
+            func_code = '\n'.join(func_lines)
+            
+            # Create LLM input
+            from .llm_tools import FunctionSummaryInput
+            llm_input = FunctionSummaryInput(
+                function_name=func_info.name,
+                function_code=func_code,
+                file_path=func_info.file_path,
+                parameters=func_info.parameters,
+                calls=func_info.calls
+            )
+            
+            # Get LLM analysis
+            llm_output = self.llm_tools_manager.function_summarizer.invoke(
+                llm_input, 
+                type(llm_input)  # This should be FunctionSummaryOutput
+            )
+            
+            if llm_output:
+                # Update summary with LLM insights
+                summary = self._merge_llm_insights(summary, llm_output.summary)
+                summary.llm_analysis_used = True
+                summary.llm_confidence = llm_output.confidence
+                summary.analysis_method = "hybrid"
+                summary.analysis_confidence = max(summary.analysis_confidence, llm_output.confidence)
+        
+        except Exception as e:
+            if self.logger:
+                self.logger.log(f"Error enhancing summary with LLM for {func_info.name}: {e}", level="ERROR")
+        
+        return summary
+    
+    def _merge_llm_insights(self, summary: FunctionSummary, llm_data: Dict[str, Any]) -> FunctionSummary:
+        """Merge LLM insights into the summary."""
+        
+        # Update parameters
+        if 'parameters' in llm_data:
+            for i, param_data in enumerate(llm_data['parameters']):
+                if i < len(summary.parameters):
+                    param = summary.parameters[i]
+                    from .summary import TaintPropagationType
+                    param.taint_propagation = TaintPropagationType(param_data.get('taint_propagation', 'no_effect'))
+                    param.taint_confidence = param_data.get('taint_confidence', 0.5)
+                    param.may_be_freed = param_data.get('may_be_freed', False)
+                    param.may_be_modified = param_data.get('may_be_modified', False)
+                    param.may_escape = param_data.get('may_escape', False)
+        
+        # Update return value
+        if 'return_value' in llm_data:
+            ret_data = llm_data['return_value']
+            if summary.return_value:
+                summary.return_value.can_introduce_taint = ret_data.get('can_introduce_taint', False)
+                summary.return_value.is_allocation = ret_data.get('is_allocation', False)
+                summary.return_value.can_be_null = ret_data.get('can_be_null', True)
+        
+        # Update side effects
+        if 'side_effects' in llm_data:
+            # Clear existing side effects and add LLM ones
+            summary.side_effects.clear()
+            for effect_data in llm_data['side_effects']:
+                from .summary import SideEffect, SideEffectType
+                side_effect = SideEffect(
+                    effect_type=SideEffectType(effect_data.get('effect_type', 'memory_operation')),
+                    description=effect_data.get('description', ''),
+                    affected_params=set(effect_data.get('affected_params', [])),
+                    is_dangerous=effect_data.get('is_dangerous', False),
+                    risk_level=effect_data.get('risk_level', 1),
+                    confidence=effect_data.get('confidence', 0.8)
+                )
+                summary.side_effects.append(side_effect)
+        
+        # Update security properties
+        summary.security_sensitive = llm_data.get('security_sensitive', summary.security_sensitive)
+        summary.validates_input = llm_data.get('validates_input', summary.validates_input)
+        summary.sanitizes_output = llm_data.get('sanitizes_output', summary.sanitizes_output)
+        summary.security_concerns = llm_data.get('security_concerns', summary.security_concerns)
+        
+        # Add LLM insights
+        summary.llm_insights = llm_data.get('llm_insights', [])
+        
+        return summary
+    
+    def _perform_hybrid_taint_analysis(self) -> List[TaintPath]:
+        """Perform hybrid taint analysis."""
+        if self.logger:
+            self.logger.log("Performing hybrid taint analysis...")
+        
+        # Find taint sources and sinks
+        taint_sources = self._find_taint_sources()
+        taint_sinks = self._find_taint_sinks()
+        
+        if self.logger:
+            self.logger.log(f"Found {len(taint_sources)} taint sources and {len(taint_sinks)} taint sinks")
+        
+        # Build call graph for path finding
+        call_graph = {}
+        for func_key, func_info in self.functions.items():
+            call_graph[func_key] = func_info.calls
+        
+        # Find taint paths
+        taint_paths = self.hybrid_taint_analyzer.find_taint_paths(
+            taint_sources, taint_sinks, self.function_summaries, call_graph
+        )
+        
+        if self.logger:
+            self.logger.log(f"Found {len(taint_paths)} taint paths")
         
         return taint_paths
     
-    def _find_taint_source_functions(self) -> List[str]:
-        """Find functions that can introduce taint."""
+    def _find_taint_sources(self) -> List[str]:
+        """Find functions that can be taint sources."""
         sources = []
         
         for func_key, summary in self.function_summaries.items():
-            # Functions that read user input
-            if any(effect.type == 'user_input' for effect in summary.side_effects):
-                sources.append(func_key)
-            
-            # Functions that return tainted data
-            if (summary.return_value and 
-                hasattr(summary.return_value, 'taint_source') and 
-                summary.return_value.taint_source):
+            if summary.is_taint_source():
                 sources.append(func_key)
         
         return sources
     
-    def _find_taint_sink_functions(self) -> List[str]:
-        """Find functions that are dangerous sinks for tainted data."""
+    def _find_taint_sinks(self) -> List[str]:
+        """Find functions that can be taint sinks."""
         sinks = []
         
         for func_key, summary in self.function_summaries.items():
-            # Functions with dangerous side effects
-            if summary.has_dangerous_side_effects():
-                sinks.append(func_key)
-            
-            # Functions that are security sensitive
-            if summary.security_sensitive:
-                sinks.append(func_key)
-            
-            # Functions that don't validate input
-            if not summary.validates_input and summary.security_sensitive:
+            if summary.is_taint_sink():
                 sinks.append(func_key)
         
         return sinks
     
-    def _trace_taint_through_call_graph(self, source_func: str, sink_func: str) -> List[TaintPath]:
-        """Trace taint flow from source to sink through call graph."""
-        paths = []
-        
-        # Find all call paths from source to sink
-        call_paths = self.call_graph_builder.find_call_paths(source_func, sink_func)
-        if not call_paths:
-            return paths
-        
-        for call_path in call_paths:
-            # Check if taint can flow through this path
-            if self._can_taint_flow_through_path(call_path):
-                # Create taint path with detailed path information
-                detailed_path_steps = self._create_detailed_path_steps(call_path)
-                taint_path = TaintPath(
-                    source=DataFlowNode(
-                        function=source_func,
-                        variable="return",
-                        line_number=0,
-                        node_type='source'
-                    ),
-                    sink=DataFlowNode(
-                        function=sink_func,
-                        variable="parameter",
-                        line_number=0,
-                        node_type='sink'
-                    ),
-                    path=detailed_path_steps,
-                    confidence=self._calculate_path_confidence(call_path),
-                    vulnerability_type=self._determine_vulnerability_from_sink(sink_func)
-                )
-                paths.append(taint_path)
-        
-        return paths
-    
-    def _can_taint_flow_through_path(self, call_path: List[str]) -> bool:
-        """Check if taint can flow through a call path."""
-        
-        for i in range(len(call_path) - 1):
-            current_func = call_path[i]
-            next_func = call_path[i + 1]
-            
-            # Check if current function can propagate taint to next function
-            if not self._can_propagate_taint(current_func, next_func):
-                return False
-            
-            # Check if there's a sanitizer in the path
-            current_summary = self.function_summaries.get(current_func)
-            if current_summary and current_summary.sanitizes_output:
-                return False
-        
-        return True
-    
-    def _can_propagate_taint(self, caller_func: str, callee_func: str) -> bool:
-        """Check if caller can propagate taint to callee."""
-        
-        caller_summary = self.function_summaries.get(caller_func)
-        if not caller_summary:
-            return True  # Conservative assumption
-        
-        # Check if caller preserves taint in return value or parameters
-        for param in caller_summary.parameters:
-            if param.taint_flow == TaintEffect.PRESERVES_TAINT:
-                return True
-        
-        # Check if return value can be tainted
-        if (caller_summary.return_value and 
-            caller_summary.return_value.depends_on_params):
-            return True
-        
-        return False
-    
-    def _calculate_path_confidence(self, call_path: List[str]) -> float:
-        """Calculate confidence for a taint path."""
-        confidence = 1.0
-        
-        for func_key in call_path:
-            summary = self.function_summaries.get(func_key)
-            if summary:
-                confidence *= summary.analysis_confidence
-        
-        return confidence
-    
-    def _create_detailed_path_steps(self, call_path: List[str]) -> List[DataFlowNode]:
-        """Create detailed path steps for interprocedural taint flow."""
-        path_steps = []
-        
-        for i, func_key in enumerate(call_path):
-            func_info = self.functions.get(func_key)
-            if func_info:
-                step = DataFlowNode(
-                    function=func_info.name,
-                    variable="",
-                    line_number=func_info.start_line,
-                    node_type='propagation' if 0 < i < len(call_path) - 1 else 'endpoint'
-                )
-                path_steps.append(step)
-        
-        return path_steps
-    
-    def _determine_vulnerability_from_sink(self, sink_func: str) -> VulnerabilityType:
-        """Determine vulnerability type based on sink function."""
-        
-        summary = self.function_summaries.get(sink_func)
-        if not summary:
-            return VulnerabilityType.SQL_INJECTION  # Default
-        
-        # Check side effects to determine vulnerability type
-        for effect in summary.side_effects:
-            if effect.type == 'system_call':
-                return VulnerabilityType.COMMAND_INJECTION
-            elif effect.type == 'file_io':
-                return VulnerabilityType.PATH_TRAVERSAL
-            elif 'sql' in effect.description.lower():
-                return VulnerabilityType.SQL_INJECTION
-        
-        return VulnerabilityType.COMMAND_INJECTION  # Default for dangerous sinks
-    
-    def analyze_data_flow(self, file_content: Dict[str, str]) -> List[TaintPath]:
-        """Analyze data flow for taint propagation.
-        
-        Args:
-            file_content: Dictionary mapping file paths to their content
-            
-        Returns:
-            List of taint paths representing potential vulnerabilities
-        """
-        return self.data_flow_builder.analyze_data_flow(file_content)
-    
-
-    
-    def detect_interprocedural_vulnerabilities(self, file_content: Dict[str, str]) -> List[Vulnerability]:
-        """Detect vulnerabilities using interprocedural analysis.
-        
-        Args:
-            file_content: Dictionary mapping file paths to content
-            
-        Returns:
-            List of detected vulnerabilities
-        """
+    def _detect_vulnerabilities(self, taint_paths: List[TaintPath]) -> List[Vulnerability]:
+        """Detect vulnerabilities from taint paths."""
         vulnerabilities = []
-        
-        # Analyze data flow for taint propagation
-        taint_paths = self.analyze_data_flow(file_content)
         
         for taint_path in taint_paths:
-            # Convert taint path to vulnerability
-            vuln = Vulnerability(
-                vuln_type=taint_path.vulnerability_type,
-                severity=Severity.HIGH,
-                location=CodeLocation(
-                    file_path="",  # Would get from taint path
-                    line_start=taint_path.sink.line_number,
-                    line_end=taint_path.sink.line_number
-                ),
-                description=f"Tainted data flows from {taint_path.source.node_type} to {taint_path.sink.node_type}",
-                evidence=f"Path: {len(taint_path.path)} steps",
-                confidence=taint_path.confidence,
-                recommendation="Sanitize input before using in sensitive operations"
+            if taint_path.confidence > 0.5:  # Only consider high-confidence paths
+                vuln = self._create_vulnerability_from_taint_path(taint_path)
+                if vuln:
+                    vulnerabilities.append(vuln)
+        
+        return vulnerabilities
+    
+    def _create_vulnerability_from_taint_path(self, taint_path: TaintPath) -> Optional[Vulnerability]:
+        """Create vulnerability from taint path."""
+        
+        # Determine vulnerability type based on sink
+        sink_func = taint_path.sink_function
+        vuln_type = self._determine_vulnerability_type(sink_func)
+        
+        # Get function info for location
+        if sink_func in self.functions:
+            func_info = self.functions[sink_func]
+            location = CodeLocation(
+                file_path=func_info.file_path,
+                line_start=func_info.start_line,
+                line_end=func_info.end_line
             )
-            vulnerabilities.append(vuln)
+        else:
+            location = CodeLocation(file_path="unknown", line_start=0, line_end=0)
         
-        # Analyze call graph for other patterns
-        call_graph_vulns = self._analyze_call_graph_patterns()
-        vulnerabilities.extend(call_graph_vulns)
+        # Create vulnerability
+        vulnerability = Vulnerability(
+            vuln_type=vuln_type,
+            severity=Severity.HIGH if taint_path.confidence > 0.8 else Severity.MEDIUM,
+            location=location,
+            description=f"Tainted data flows from {taint_path.source_function} to {taint_path.sink_function}",
+            evidence=f"Path: {' -> '.join(taint_path.path)} (confidence: {taint_path.confidence:.2f})",
+            confidence=taint_path.confidence,
+            recommendation="Validate and sanitize input data before using in sensitive operations"
+        )
         
-        return vulnerabilities
+        return vulnerability
     
-    def _analyze_call_graph_patterns(self) -> List[Vulnerability]:
-        """Analyze call graph for vulnerability patterns."""
-        vulnerabilities = []
+    def _determine_vulnerability_type(self, sink_func: str) -> VulnerabilityType:
+        """Determine vulnerability type based on sink function."""
         
-        # Look for dangerous call patterns
-        for caller_id, caller_info in self.functions.items():
-            # Check for calls to dangerous functions
-            dangerous_calls = set(caller_info.calls) & self.data_flow_builder.taint_sinks
+        if sink_func in self.function_summaries:
+            summary = self.function_summaries[sink_func]
             
-            for dangerous_call in dangerous_calls:
-                vuln = Vulnerability(
-                    vuln_type=VulnerabilityType.COMMAND_INJECTION,  # Generic
-                    severity=Severity.MEDIUM,
-                    location=CodeLocation(
-                        file_path=caller_info.file_path,
-                        line_start=caller_info.start_line,
-                        line_end=caller_info.end_line
-                    ),
-                    description=f"Function calls potentially dangerous operation: {dangerous_call}",
-                    evidence=f"Call to {dangerous_call} in {caller_info.name}",
-                    confidence=0.6,
-                    recommendation="Validate inputs and use safer alternatives"
-                )
-                vulnerabilities.append(vuln)
+            # Check side effects
+            for effect in summary.side_effects:
+                if effect.effect_type.value == 'system_call':
+                    return VulnerabilityType.COMMAND_INJECTION
+                elif effect.effect_type.value == 'file_io':
+                    return VulnerabilityType.PATH_TRAVERSAL
         
-        return vulnerabilities
+        # Default based on function name
+        if any(keyword in sink_func.lower() for keyword in ['sql', 'query', 'execute']):
+            return VulnerabilityType.SQL_INJECTION
+        elif any(keyword in sink_func.lower() for keyword in ['system', 'exec', 'shell']):
+            return VulnerabilityType.COMMAND_INJECTION
+        else:
+            return VulnerabilityType.BUFFER_OVERFLOW
     
-    def analyze_reachability(self, entry_points: List[str], target_functions: List[str]) -> Dict[str, List[str]]:
-        """Analyze reachability from entry points to target functions.
+    def _calculate_complexity_score(self, func_info: FunctionInfo) -> int:
+        """Calculate complexity score for a function."""
+        param_count = len(func_info.parameters)
+        call_count = len(func_info.calls)
+        line_count = func_info.end_line - func_info.start_line
         
-        Args:
-            entry_points: List of entry point function identifiers
-            target_functions: List of target function identifiers
-            
-        Returns:
-            Dictionary mapping target functions to reachable entry points
-        """
-        return self.call_graph_builder.analyze_reachability(entry_points, target_functions)
-    
-    def get_call_graph_metrics(self):
-        """Get metrics about the call graph.
+        complexity = 1
+        if param_count > 5:
+            complexity += 1
+        if call_count > 10:
+            complexity += 1
+        if line_count > 50:
+            complexity += 1
+        if line_count > 100:
+            complexity += 1
         
-        Returns:
-            IRMetrics object with call graph metrics
-        """
-        return self.call_graph_builder.get_call_graph_metrics()
+        return min(complexity, 5)
     
-
+    def _generate_analysis_statistics(self) -> Dict[str, Any]:
+        """Generate analysis statistics."""
+        return {
+            'total_functions': len(self.functions),
+            'analyzed_functions': len(self.function_summaries),
+            'taint_sources': len(self._find_taint_sources()),
+            'taint_sinks': len(self._find_taint_sinks()),
+            'vulnerabilities_found': 0,  # Will be updated by caller
+            'analysis_methods': {
+                'static_only': sum(1 for s in self.function_summaries.values() if s.analysis_method == 'static'),
+                'llm_enhanced': sum(1 for s in self.function_summaries.values() if s.analysis_method == 'hybrid')
+            }
+        }
+    
+    def _generate_llm_usage_statistics(self) -> Dict[str, Any]:
+        """Generate LLM usage statistics."""
+        if not self.llm_tools_manager:
+            return {'llm_available': False}
+        
+        return {
+            'llm_available': True,
+            'tool_stats': self.llm_tools_manager.get_all_stats(),
+            'hybrid_taint_stats': self.hybrid_taint_analyzer.get_analysis_statistics()
+        }

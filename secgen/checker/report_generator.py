@@ -5,7 +5,7 @@ from typing import Dict, List, Set, Optional, Any
 from dataclasses import dataclass
 
 from secgen.core.models import Vulnerability, VulnerabilityType, Severity
-from secgen.core.function_summarizer import LLMFunctionSummary
+from secgen.core.summary import FunctionSummary
 
 
 @dataclass
@@ -19,7 +19,7 @@ class AnalysisReport:
     call_graph_metrics: Dict[str, Any]
     taint_analysis_summary: Dict[str, Any]
     memory_statistics: Dict[str, Any]
-    function_summaries: Dict[str, LLMFunctionSummary]
+    function_summaries: Dict[str, FunctionSummary]
     analysis_time: float
     confidence_distribution: Dict[str, int]
 
@@ -30,7 +30,7 @@ class ReportGenerator:
     def generate_report(self, files_analyzed: List[str], 
                        vulnerabilities: List[Vulnerability],
                        static_results: Dict[str, Any],
-                       function_summaries: Dict[str, LLMFunctionSummary],
+                       function_summaries: Dict[str, FunctionSummary],
                        analysis_time: float) -> AnalysisReport:
         """Generate comprehensive analysis report."""
         

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from secgen.core.models import Vulnerability, VulnerabilityType
 from secgen.core.interprocedural_analyzer import InterproceduralAnalyzer
-from secgen.core.function_summarizer import FunctionSummarizer
+from secgen.core.summary import FunctionSummary
 from secgen.checker.file_analyzer_core import FileAnalyzerCore
 from secgen.checker.report_generator import AnalysisReport, ReportGenerator
 
@@ -29,7 +29,7 @@ class ProjectAnalyzer:
         # Initialize components
         self.file_analyzer = FileAnalyzerCore(config, logger)
         self.interprocedural_analyzer = InterproceduralAnalyzer(model, logger)
-        self.function_summarizer = FunctionSummarizer(model, logger)
+        self.function_summarizer = FunctionSummaryGenerator(model, logger)
         self.report_generator = ReportGenerator()
     
     def analyze_project(self, project_path: str, 

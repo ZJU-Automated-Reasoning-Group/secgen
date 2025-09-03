@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import Mock, patch
 from secgen.core.interprocedural_analyzer import InterproceduralAnalyzer
 from secgen.core.models import FunctionInfo, Vulnerability, VulnerabilityType, Severity, CodeLocation
-from secgen.core.function_summary import FunctionSummary
+from secgen.core.summary import FunctionSummary
 
 
 class TestInterproceduralAnalyzer:
