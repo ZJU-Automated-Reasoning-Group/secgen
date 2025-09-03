@@ -16,8 +16,7 @@ setup(
     description="Advanced code quality audit agent with interprocedural analysis, memory safety detection, and taint analysis",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages(where="secgen"),
-    package_dir={"": "secgen"},
+    packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",

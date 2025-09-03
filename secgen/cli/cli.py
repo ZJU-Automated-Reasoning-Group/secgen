@@ -1,33 +1,15 @@
 """Command-line interface for the code quality audit agent."""
 
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
 from typing import List, Optional
 
-from secgen.checker.vulnerability_detector import VulnerabilityDetector, AnalysisReport
-from secgen.core.analyzer import Severity, VulnerabilityType
+from secgen.core.models import VulnerabilityType
 from secgen.agent.models import OpenAIServerModel
-
-try:
-    from secgen.agent.minotor import AgentLogger, LogLevel
-except ImportError:
-    import logging
-    from enum import IntEnum
-    
-    class LogLevel(IntEnum):
-        OFF, ERROR, INFO, DEBUG = -1, 0, 1, 2
-    
-    class AgentLogger:
-        def __init__(self, level=LogLevel.INFO):
-            self.level = level
-            self.logger = logging.getLogger(__name__)
-            
-        def log(self, message, level=LogLevel.INFO):
-            if level <= self.level:
-                getattr(self.logger, {LogLevel.ERROR: 'error', LogLevel.DEBUG: 'debug'}.get(level, 'info'))(message)
+from secgen.reports.report_process import VulnerabilityDetector, AnalysisReport, convert_severity, convert_vuln_types, format_output, list_vulnerability_types
+from secgen.agent.minotor import AgentLogger, LogLevel
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -45,7 +27,7 @@ def create_parser() -> argparse.ArgumentParser:
     # Core arguments
     parser.add_argument("project_path", help="Path to the project directory to analyze")
     parser.add_argument("--extensions", nargs="+", default=[".py", ".c", ".cpp", ".h", ".hpp", ".java", ".js", ".ts"], help="File extensions to analyze")
-    parser.add_argument("--exclude", nargs="+", default=["test", "tests", "__pycache__", ".git", "node_modules", "vendor"], help="Patterns to exclude")
+    parser.add_argument("--exclude", nargs="+", default=["__pycache__", ".git", "node_modules", "vendor"], help="Patterns to exclude")
     parser.add_argument("--min-severity", choices=["info", "low", "medium", "high", "critical"], default="low", help="Minimum severity level")
     parser.add_argument("--min-confidence", type=float, default=0.0, metavar="0.0-1.0", help="Minimum confidence threshold")
     parser.add_argument("--vuln-types", nargs="+", choices=[vt.value for vt in VulnerabilityType], help="Specific vulnerability types")
@@ -99,69 +81,6 @@ def setup_model(args, logger) -> Optional[OpenAIServerModel]:
         logger.log(f"Error initializing model: {e}", level=LogLevel.ERROR)
         return None
 
-
-def convert_severity(severity_str: str) -> Severity:
-    """Convert string severity to Severity enum."""
-    return getattr(Severity, severity_str.upper())
-
-
-def convert_vuln_types(type_strings: List[str]) -> set:
-    """Convert string vulnerability types to VulnerabilityType set."""
-    return {vt for type_str in type_strings for vt in VulnerabilityType if vt.value == type_str}
-
-
-def format_output(report: AnalysisReport, detector: VulnerabilityDetector, format_type: str) -> str:
-    """Format analysis report based on format type."""
-    if format_type == "json":
-        return json.dumps(detector.export_json_report(report), indent=2)
-    elif format_type == "sarif":
-        return format_sarif_output(report, detector)
-    else:  # text
-        return detector.generate_summary_report(report)
-
-
-def format_sarif_output(report: AnalysisReport, detector: VulnerabilityDetector) -> str:
-    """Format analysis report as SARIF."""
-    sarif_report = {
-        "version": "2.1.0",
-        "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-        "runs": [{"tool": {"driver": {"name": "SecGen Code Audit Agent", "version": "1.0.0", "rules": []}}, "results": []}]
-    }
-    
-    # Add rules and results
-    seen_rules = set()
-    for vuln in report.vulnerabilities:
-        rule_id = vuln.vuln_type.value
-        if rule_id not in seen_rules:
-            rule = {
-                "id": rule_id,
-                "name": vuln.vuln_type.value.replace('_', ' ').title(),
-                "shortDescription": {"text": vuln.description},
-                "defaultConfiguration": {"level": "warning" if vuln.severity in [Severity.LOW, Severity.MEDIUM] else "error"}
-            }
-            if vuln.cwe_id:
-                rule["properties"] = {"cwe": vuln.cwe_id}
-            sarif_report["runs"][0]["tool"]["driver"]["rules"].append(rule)
-            seen_rules.add(rule_id)
-        
-        result = {
-            "ruleId": rule_id,
-            "message": {"text": vuln.description},
-            "locations": [{"physicalLocation": {"artifactLocation": {"uri": vuln.location.file_path}, "region": {"startLine": vuln.location.line_start, "endLine": vuln.location.line_end}}}],
-            "level": "warning" if vuln.severity in [Severity.LOW, Severity.MEDIUM] else "error"
-        }
-        if vuln.recommendation:
-            result["fixes"] = [{"description": {"text": vuln.recommendation}}]
-        sarif_report["runs"][0]["results"].append(result)
-    
-    return json.dumps(sarif_report, indent=2)
-
-
-def list_vulnerability_types():
-    """List all available vulnerability types."""
-    print("Available vulnerability types:")
-    for vt in VulnerabilityType:
-        print(f"  {vt.value:30} - {vt.value.replace('_', ' ').title()}")
 
 
 async def main():

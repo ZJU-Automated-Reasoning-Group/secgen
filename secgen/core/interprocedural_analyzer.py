@@ -1,43 +1,10 @@
 """Interprocedural analysis for cross-function vulnerability detection."""
 
-import networkx as nx
 from typing import Dict, List, Set, Tuple, Optional, Any
-from dataclasses import dataclass, field
-from collections import defaultdict, deque
 
-from secgen.core.analyzer import FunctionInfo, Vulnerability, VulnerabilityType, Severity, CodeLocation, PathStep, VulnerabilityPath
+from secgen.core.models import FunctionInfo, Vulnerability, VulnerabilityType, Severity, CodeLocation, PathStep, VulnerabilityPath
 from secgen.core.function_summary import FunctionSummaryGenerator, FunctionSummary, ParameterEffect, TaintEffect
-
-
-@dataclass 
-class CallSite:
-    """Represents a function call site."""
-    caller: str
-    callee: str
-    file_path: str
-    line_number: int
-    arguments: List[str] = field(default_factory=list)
-    context: str = ""
-
-
-@dataclass
-class DataFlowNode:
-    """Node in data flow graph."""
-    function: str
-    variable: str
-    line_number: int
-    node_type: str  # 'source', 'sink', 'sanitizer', 'normal'
-    taint_status: str = 'unknown'  # 'tainted', 'clean', 'unknown'
-
-
-@dataclass
-class TaintPath:
-    """Path of tainted data flow."""
-    source: DataFlowNode
-    sink: DataFlowNode
-    path: List[DataFlowNode]
-    confidence: float
-    vulnerability_type: VulnerabilityType
+from secgen.ir import CallGraphBuilder, DataFlowGraphBuilder, TaintPath, DataFlowNode
 
 
 class InterproceduralAnalyzer:
@@ -52,47 +19,19 @@ class InterproceduralAnalyzer:
         """
         self.model = model
         self.logger = logger
-        self.call_graph = nx.DiGraph()
         self.functions: Dict[str, FunctionInfo] = {}
-        self.call_sites: List[CallSite] = []
-        self.data_flow_graph = nx.DiGraph()
-        self.taint_sources: Set[str] = set()
-        self.taint_sinks: Set[str] = set()
-        self.sanitizers: Set[str] = set()
+        
+        # IR builders
+        self.call_graph_builder = CallGraphBuilder(logger)
+        self.data_flow_builder = DataFlowGraphBuilder(logger)
         
         # Function summary generator for interprocedural analysis
         self.summary_generator = FunctionSummaryGenerator(model, logger)
         self.function_summaries: Dict[str, FunctionSummary] = {}
-        
-        # Initialize known taint sources and sinks
-        self._init_taint_patterns()
     
-    def _init_taint_patterns(self):
-        """Initialize known taint sources, sinks, and sanitizers."""
-        # Common taint sources (user input)
-        self.taint_sources.update([
-            'input', 'raw_input', 'sys.argv', 'os.environ',
-            'request.args', 'request.form', 'request.json',
-            'scanf', 'gets', 'fgets', 'getenv',
-            'System.getProperty', 'Scanner.nextLine'
-        ])
-        
-        # Common taint sinks (dangerous operations)
-        self.taint_sinks.update([
-            'exec', 'eval', 'os.system', 'subprocess.call',
-            'cursor.execute', 'connection.execute',
-            'printf', 'sprintf', 'strcpy', 'strcat',
-            'Runtime.exec', 'ProcessBuilder'
-        ])
-        
-        # Common sanitizers
-        self.sanitizers.update([
-            'escape', 'quote', 'sanitize', 'validate',
-            'html.escape', 'urllib.parse.quote',
-            'parameterize', 'prepare'
-        ])
+
     
-    def build_call_graph(self, functions: Dict[str, FunctionInfo]) -> nx.DiGraph:
+    def build_call_graph(self, functions: Dict[str, FunctionInfo]):
         """Build interprocedural call graph.
         
         Args:
@@ -102,33 +41,7 @@ class InterproceduralAnalyzer:
             NetworkX directed graph representing call relationships
         """
         self.functions = functions
-        self.call_graph.clear()
-        
-        # Add all functions as nodes
-        for func_id, func_info in functions.items():
-            self.call_graph.add_node(func_id, info=func_info)
-        
-        # Add call edges
-        for caller_id, caller_info in functions.items():
-            for callee_name in caller_info.calls:
-                # Find matching callee function
-                for callee_id, callee_info in functions.items():
-                    if callee_info.name == callee_name:
-                        self.call_graph.add_edge(caller_id, callee_id)
-                        
-                        # Record call site
-                        call_site = CallSite(
-                            caller=caller_id,
-                            callee=callee_id,
-                            file_path=caller_info.file_path,
-                            line_number=caller_info.start_line  # Simplified
-                        )
-                        self.call_sites.append(call_site)
-        
-        if self.logger:
-            self.logger.log(f"Built call graph with {self.call_graph.number_of_nodes()} nodes and {self.call_graph.number_of_edges()} edges")
-        
-        return self.call_graph
+        return self.call_graph_builder.build_call_graph(functions)
     
     def build_function_summaries(self, functions: Dict[str, FunctionInfo], 
                                 file_contents: Dict[str, str]) -> Dict[str, FunctionSummary]:
@@ -162,10 +75,7 @@ class InterproceduralAnalyzer:
         Returns:
             Set of reachable function identifiers
         """
-        if start_function not in self.call_graph:
-            return set()
-        
-        return set(nx.descendants(self.call_graph, start_function)) | {start_function}
+        return self.call_graph_builder.find_reachable_functions(start_function)
     
     def find_call_paths(self, source_func: str, target_func: str) -> List[List[str]]:
         """Find all call paths between two functions.
@@ -177,14 +87,29 @@ class InterproceduralAnalyzer:
         Returns:
             List of call paths (each path is a list of function identifiers)
         """
-        if source_func not in self.call_graph or target_func not in self.call_graph:
-            return []
+        return self.call_graph_builder.find_call_paths(source_func, target_func)
+    
+    def get_functions_calling(self, function_id: str) -> List[str]:
+        """Get all functions that call a specific function.
         
-        try:
-            paths = list(nx.all_simple_paths(self.call_graph, source_func, target_func))
-            return paths
-        except nx.NetworkXNoPath:
-            return []
+        Args:
+            function_id: Function identifier
+            
+        Returns:
+            List of function identifiers that call this function
+        """
+        return self.call_graph_builder.get_functions_calling(function_id)
+    
+    def get_functions_called_by(self, function_id: str) -> List[str]:
+        """Get all functions called by a specific function.
+        
+        Args:
+            function_id: Function identifier
+            
+        Returns:
+            List of function identifiers called by this function
+        """
+        return self.call_graph_builder.get_functions_called_by(function_id)
     
     def analyze_interprocedural_taint_flow(self) -> List[TaintPath]:
         """Analyze taint flow using function summaries (IDFS-style).
@@ -257,9 +182,8 @@ class InterproceduralAnalyzer:
         paths = []
         
         # Find all call paths from source to sink
-        try:
-            call_paths = list(nx.all_simple_paths(self.call_graph, source_func, sink_func, cutoff=10))
-        except nx.NetworkXNoPath:
+        call_paths = self.call_graph_builder.find_call_paths(source_func, sink_func)
+        if not call_paths:
             return paths
         
         for call_path in call_paths:
@@ -380,165 +304,9 @@ class InterproceduralAnalyzer:
         Returns:
             List of taint paths representing potential vulnerabilities
         """
-        taint_paths = []
-        
-        # Build data flow graph
-        self._build_data_flow_graph(file_content)
-        
-        # Find taint paths from sources to sinks
-        for source_node in self.data_flow_graph.nodes():
-            if self.data_flow_graph.nodes[source_node].get('type') == 'source':
-                for sink_node in self.data_flow_graph.nodes():
-                    if self.data_flow_graph.nodes[sink_node].get('type') == 'sink':
-                        paths = self._find_taint_paths(source_node, sink_node)
-                        taint_paths.extend(paths)
-        
-        return taint_paths
+        return self.data_flow_builder.analyze_data_flow(file_content)
     
-    def _build_data_flow_graph(self, file_content: Dict[str, str]):
-        """Build data flow graph from source code."""
-        self.data_flow_graph.clear()
-        
-        for file_path, content in file_content.items():
-            lines = content.split('\n')
-            
-            for i, line in enumerate(lines, 1):
-                # Identify taint sources
-                for source in self.taint_sources:
-                    if source in line:
-                        node_id = f"{file_path}:{i}:source"
-                        self.data_flow_graph.add_node(
-                            node_id,
-                            type='source',
-                            line=i,
-                            file=file_path,
-                            content=line.strip()
-                        )
-                
-                # Identify taint sinks
-                for sink in self.taint_sinks:
-                    if sink in line:
-                        node_id = f"{file_path}:{i}:sink"
-                        self.data_flow_graph.add_node(
-                            node_id,
-                            type='sink',
-                            line=i,
-                            file=file_path,
-                            content=line.strip()
-                        )
-                
-                # Identify sanitizers
-                for sanitizer in self.sanitizers:
-                    if sanitizer in line:
-                        node_id = f"{file_path}:{i}:sanitizer"
-                        self.data_flow_graph.add_node(
-                            node_id,
-                            type='sanitizer',
-                            line=i,
-                            file=file_path,
-                            content=line.strip()
-                        )
-        
-        # Add edges based on data dependencies (simplified)
-        self._add_data_flow_edges(file_content)
-    
-    def _add_data_flow_edges(self, file_content: Dict[str, str]):
-        """Add data flow edges between nodes."""
-        # This is a simplified implementation
-        # In practice, would need more sophisticated data flow analysis
-        
-        nodes = list(self.data_flow_graph.nodes(data=True))
-        
-        # Connect nodes in the same function if they involve the same variable
-        for i, (node1, data1) in enumerate(nodes):
-            for j, (node2, data2) in enumerate(nodes[i+1:], i+1):
-                if (data1['file'] == data2['file'] and 
-                    abs(data1['line'] - data2['line']) < 10):  # Within 10 lines
-                    
-                    # Simple heuristic: if lines contain common variables
-                    if self._have_common_variables(data1['content'], data2['content']):
-                        self.data_flow_graph.add_edge(node1, node2)
-    
-    def _have_common_variables(self, line1: str, line2: str) -> bool:
-        """Check if two lines have common variables (simplified)."""
-        import re
-        
-        # Extract variable names (simplified pattern)
-        var_pattern = r'\b[a-zA-Z_][a-zA-Z0-9_]*\b'
-        vars1 = set(re.findall(var_pattern, line1))
-        vars2 = set(re.findall(var_pattern, line2))
-        
-        # Remove common keywords
-        keywords = {'if', 'else', 'for', 'while', 'def', 'class', 'return', 'import'}
-        vars1 -= keywords
-        vars2 -= keywords
-        
-        return bool(vars1 & vars2)
-    
-    def _find_taint_paths(self, source: str, sink: str) -> List[TaintPath]:
-        """Find taint paths from source to sink."""
-        paths = []
-        
-        try:
-            # Find all simple paths from source to sink
-            simple_paths = list(nx.all_simple_paths(self.data_flow_graph, source, sink, cutoff=10))
-            
-            for path in simple_paths:
-                # Check if path goes through sanitizer
-                has_sanitizer = any(
-                    self.data_flow_graph.nodes[node].get('type') == 'sanitizer'
-                    for node in path[1:-1]  # Exclude source and sink
-                )
-                
-                if not has_sanitizer:  # Only report unsanitized paths
-                    source_data = self.data_flow_graph.nodes[source]
-                    sink_data = self.data_flow_graph.nodes[sink]
-                    
-                    # Create data flow nodes
-                    source_node = DataFlowNode(
-                        function="",  # Would need function context
-                        variable="",
-                        line_number=source_data['line'],
-                        node_type='source'
-                    )
-                    
-                    sink_node = DataFlowNode(
-                        function="",
-                        variable="",
-                        line_number=sink_data['line'],
-                        node_type='sink'
-                    )
-                    
-                    # Determine vulnerability type based on sink
-                    vuln_type = self._determine_vulnerability_type(sink_data['content'])
-                    
-                    taint_path = TaintPath(
-                        source=source_node,
-                        sink=sink_node,
-                        path=[],  # Would populate with intermediate nodes
-                        confidence=0.8,  # Would calculate based on path analysis
-                        vulnerability_type=vuln_type
-                    )
-                    
-                    paths.append(taint_path)
-        
-        except nx.NetworkXNoPath:
-            pass
-        
-        return paths
-    
-    def _determine_vulnerability_type(self, sink_content: str) -> VulnerabilityType:
-        """Determine vulnerability type based on sink content."""
-        content_lower = sink_content.lower()
-        
-        if any(term in content_lower for term in ['execute', 'query', 'sql']):
-            return VulnerabilityType.SQL_INJECTION
-        elif any(term in content_lower for term in ['system', 'exec', 'subprocess']):
-            return VulnerabilityType.COMMAND_INJECTION
-        elif any(term in content_lower for term in ['strcpy', 'sprintf', 'strcat']):
-            return VulnerabilityType.BUFFER_OVERFLOW
-        else:
-            return VulnerabilityType.SQL_INJECTION  # Default
+
     
     def detect_interprocedural_vulnerabilities(self, file_content: Dict[str, str]) -> List[Vulnerability]:
         """Detect vulnerabilities using interprocedural analysis.
@@ -584,7 +352,7 @@ class InterproceduralAnalyzer:
         # Look for dangerous call patterns
         for caller_id, caller_info in self.functions.items():
             # Check for calls to dangerous functions
-            dangerous_calls = set(caller_info.calls) & self.taint_sinks
+            dangerous_calls = set(caller_info.calls) & self.data_flow_builder.taint_sinks
             
             for dangerous_call in dangerous_calls:
                 vuln = Vulnerability(
@@ -614,56 +382,14 @@ class InterproceduralAnalyzer:
         Returns:
             Dictionary mapping target functions to reachable entry points
         """
-        reachability = {}
-        
-        for target in target_functions:
-            reachable_from = []
-            
-            for entry in entry_points:
-                paths = self.find_call_paths(entry, target)
-                if paths:
-                    reachable_from.append(entry)
-            
-            reachability[target] = reachable_from
-        
-        return reachability
+        return self.call_graph_builder.analyze_reachability(entry_points, target_functions)
     
-    def get_call_graph_metrics(self) -> Dict[str, Any]:
+    def get_call_graph_metrics(self):
         """Get metrics about the call graph.
         
         Returns:
-            Dictionary with call graph metrics
+            IRMetrics object with call graph metrics
         """
-        if not self.call_graph:
-            return {}
-        
-        return {
-            'num_functions': self.call_graph.number_of_nodes(),
-            'num_calls': self.call_graph.number_of_edges(),
-            'max_depth': self._calculate_max_depth(),
-            'cyclic_dependencies': list(nx.simple_cycles(self.call_graph)),
-            'strongly_connected_components': len(list(nx.strongly_connected_components(self.call_graph)))
-        }
+        return self.call_graph_builder.get_call_graph_metrics()
     
-    def _calculate_max_depth(self) -> int:
-        """Calculate maximum call depth in the call graph."""
-        max_depth = 0
-        
-        # Find functions with no incoming edges (potential entry points)
-        entry_points = [node for node in self.call_graph.nodes() 
-                       if self.call_graph.in_degree(node) == 0]
-        
-        if not entry_points:
-            # If no clear entry points, use all nodes
-            entry_points = list(self.call_graph.nodes())
-        
-        for entry in entry_points:
-            try:
-                # Calculate longest path from this entry point
-                lengths = nx.single_source_shortest_path_length(self.call_graph, entry)
-                if lengths:
-                    max_depth = max(max_depth, max(lengths.values()))
-            except:
-                continue
-        
-        return max_depth
+

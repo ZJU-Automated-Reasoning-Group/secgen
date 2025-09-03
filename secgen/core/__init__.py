@@ -1,9 +1,9 @@
 """Core analysis modules for code quality audit agent."""
 
-from secgen.core.analyzer import CodeAnalyzer
+from secgen.ir.file_analyzer import FileAnalyzer
 from secgen.core.interprocedural_analyzer import InterproceduralAnalyzer
 
 __all__ = [
-    'CodeAnalyzer',
+    'FileAnalyzer',
     'InterproceduralAnalyzer'
 ]

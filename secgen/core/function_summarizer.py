@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from secgen.core.analyzer import FunctionInfo
+from secgen.core.models import FunctionInfo
 from secgen.agent.models import ChatMessage, MessageRole
 
 

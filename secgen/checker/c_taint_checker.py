@@ -5,7 +5,7 @@ from typing import Dict, List, Set, Any
 from enum import Enum
 
 from secgen.checker.base_checker import BaseChecker
-from secgen.core.analyzer import Vulnerability, VulnerabilityType, Severity, CodeLocation, PathStep, VulnerabilityPath
+from secgen.core.models import Vulnerability, VulnerabilityType, Severity, CodeLocation, PathStep, VulnerabilityPath
 
 
 class CTaintType(Enum):

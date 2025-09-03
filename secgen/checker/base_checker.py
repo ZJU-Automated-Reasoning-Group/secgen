@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict, List, Set, Optional, Any
-from secgen.core.analyzer import Vulnerability
+from secgen.core.models import Vulnerability
 
 
 class BaseChecker(ABC):

@@ -5,7 +5,7 @@ from typing import Dict, List, Set, Optional, Any
 from dataclasses import dataclass
 
 from secgen.checker.base_checker import BaseChecker
-from secgen.core.analyzer import Vulnerability, VulnerabilityType, Severity, CodeLocation, PathStep, VulnerabilityPath
+from secgen.core.models import Vulnerability, VulnerabilityType, Severity, CodeLocation, PathStep, VulnerabilityPath
 
 
 @dataclass
@@ -119,10 +119,27 @@ class CMemoryChecker(BaseChecker):
                     allocation_type=alloc_type, size=size_expr
                 )
             
+            # Track C++ new operations
+            new_match = re.search(r'(\w+)\s*=\s*new\s+([^;(]+)(?:\([^)]*\))?', line)
+            if new_match:
+                var_name, type_expr = new_match.groups()
+                self.allocations[var_name] = CMemoryAllocation(
+                    variable=var_name, file_path=file_path, line_number=i,
+                    allocation_type='new', size=type_expr.strip()
+                )
+            
             # Track free operations
             free_match = re.search(r'free\s*\(\s*(\w+)\s*\)', line)
             if free_match:
                 var_name = free_match.group(1)
+                if var_name in self.allocations:
+                    self.allocations[var_name].freed = True
+                    self.allocations[var_name].freed_line = i
+            
+            # Track delete operations
+            delete_match = re.search(r'delete\s+(\w+)', line)
+            if delete_match:
+                var_name = delete_match.group(1)
                 if var_name in self.allocations:
                     self.allocations[var_name].freed = True
                     self.allocations[var_name].freed_line = i
@@ -170,20 +187,31 @@ class CMemoryChecker(BaseChecker):
         return vulnerabilities
     
     def _detect_use_after_free(self, file_path: str, lines: List[str]) -> List[Vulnerability]:
-        """Detect use-after-free vulnerabilities."""
+        """Detect use-after-free vulnerabilities with path tracking."""
         vulnerabilities = []
         
         for i, line in enumerate(lines, 1):
             line = line.strip()
             
+            # Skip comments and delete/free statements
+            if line.startswith(('//','/*')) or 'free(' in line or 'delete ' in line:
+                continue
+            
             for var_name, allocation in self.allocations.items():
-                if (allocation.freed and allocation.freed_line and allocation.freed_line < i and
-                    var_name in line and not line.startswith(('//','/*')) and f'free({var_name})' not in line):
+                if allocation.freed and allocation.freed_line and allocation.freed_line < i:
+                    # Check for actual usage patterns after free
+                    usage_patterns = [
+                        rf'\*{re.escape(var_name)}',  # *ptr
+                        rf'{re.escape(var_name)}\s*\[',  # ptr[index]
+                        rf'{re.escape(var_name)}\s*\.',  # ptr.member
+                        rf'{re.escape(var_name)}\s*\->'  # ptr->member
+                    ]
                     
-                    # Check for actual usage patterns
-                    usage_patterns = [rf'\*{var_name}', rf'{var_name}\s*\[', rf'{var_name}\s*\.', rf'{var_name}\s*\->']
                     if any(re.search(pattern, line) for pattern in usage_patterns):
-                        vulnerabilities.append(self._create_use_after_free_vulnerability(allocation, file_path, i, line, var_name))
+                        vuln = self._create_use_after_free_vulnerability(
+                            allocation, file_path, i, line, var_name
+                        )
+                        vulnerabilities.append(vuln)
         
         return vulnerabilities
     
@@ -206,35 +234,139 @@ class CMemoryChecker(BaseChecker):
         return vulnerabilities
     
     def _detect_null_pointer_dereference(self, file_path: str, lines: List[str]) -> List[Vulnerability]:
-        """Detect null pointer dereference vulnerabilities."""
+        """Detect null pointer dereference vulnerabilities with path tracking."""
         vulnerabilities = []
+        allocated_vars = {}  # Track allocated variables and their allocation lines
         
         for i, line in enumerate(lines, 1):
             line = line.strip()
             
-            # Check for malloc without null check
+            # Track memory allocations
             malloc_match = re.search(r'(\w+)\s*=\s*(malloc|calloc|realloc)\s*\(', line)
             if malloc_match:
                 var_name = malloc_match.group(1)
+                allocated_vars[var_name] = {
+                    'line': i,
+                    'evidence': line,
+                    'null_checked': False
+                }
                 
                 # Check for null check in next few lines
                 null_check_patterns = [f'if ({var_name} == NULL)', f'if (!{var_name})', f'if ({var_name} != NULL)', f'if ({var_name})']
-                null_check_found = any(
-                    any(pattern in lines[j].strip() for pattern in null_check_patterns)
-                    for j in range(i, min(len(lines), i + 5))
-                )
-                
-                if not null_check_found:
-                    vulnerabilities.append(Vulnerability(
-                        vuln_type=VulnerabilityType.NULL_POINTER_DEREF,
-                        severity=Severity.MEDIUM,
-                        location=CodeLocation(file_path, i, i),
-                        description=f"Memory allocation result '{var_name}' not checked for NULL",
-                        evidence=line, confidence=0.6, cwe_id="CWE-476",
-                        recommendation=f"Check if {var_name} is NULL before using"
-                    ))
+                for j in range(i, min(len(lines), i + 5)):
+                    if any(pattern in lines[j].strip() for pattern in null_check_patterns):
+                        allocated_vars[var_name]['null_checked'] = True
+                        break
+            
+            # Track direct NULL assignments
+            null_assign_match = re.search(r'(\w+)\s*=\s*NULL', line)
+            if null_assign_match:
+                var_name = null_assign_match.group(1)
+                allocated_vars[var_name] = {
+                    'line': i,
+                    'evidence': line,
+                    'null_checked': False,
+                    'is_null': True
+                }
+            
+            # Track pointer member assignments to NULL
+            member_null_match = re.search(r'(\w+)->(\w+)\s*=\s*NULL', line)
+            if member_null_match:
+                var_name = member_null_match.group(1)
+                member_name = member_null_match.group(2)
+                member_key = f"{var_name}->{member_name}"
+                allocated_vars[member_key] = {
+                    'line': i,
+                    'evidence': line,
+                    'null_checked': False,
+                    'is_null': True
+                }
+            
+            # Check for pointer dereferences
+            for var_name, alloc_info in allocated_vars.items():
+                # Handle member access patterns (e.g., c->data)
+                if '->' in var_name:
+                    if var_name in line and '=' in line and var_name.split('->')[0] in line:
+                        # This is the member access dereference
+                        if not alloc_info['null_checked'] or alloc_info.get('is_null', False):
+                            vuln = self._create_null_deref_vulnerability(
+                                var_name, alloc_info, file_path, i, line
+                            )
+                            vulnerabilities.append(vuln)
+                else:
+                    # Direct pointer dereference
+                    if f'*{var_name}' in line or f'*({var_name})' in line:
+                        if not alloc_info['null_checked'] or alloc_info.get('is_null', False):
+                            vuln = self._create_null_deref_vulnerability(
+                                var_name, alloc_info, file_path, i, line
+                            )
+                            vulnerabilities.append(vuln)
+                    
+                    # Member access dereference (e.g., ptr->member)
+                    elif f'{var_name}->' in line:
+                        if not alloc_info['null_checked'] or alloc_info.get('is_null', False):
+                            vuln = self._create_null_deref_vulnerability(
+                                var_name, alloc_info, file_path, i, line
+                            )
+                            vulnerabilities.append(vuln)
+                    
+                    # Array-style access (ptr[index])
+                    elif re.search(rf'{re.escape(var_name)}\s*\[', line):
+                        if not alloc_info['null_checked'] or alloc_info.get('is_null', False):
+                            vuln = self._create_null_deref_vulnerability(
+                                var_name, alloc_info, file_path, i, line
+                            )
+                            vulnerabilities.append(vuln)
         
         return vulnerabilities
+    
+    def _create_null_deref_vulnerability(self, var_name: str, alloc_info: dict, 
+                                        file_path: str, line_number: int, evidence: str) -> Vulnerability:
+        """Create null pointer dereference vulnerability with path information."""
+        from secgen.core.models import PathStep, VulnerabilityPath
+        
+        # Create source step (where variable becomes null or is allocated without check)
+        if alloc_info.get('is_null', False):
+            source_description = f"Variable '{var_name}' assigned NULL value"
+        else:
+            source_description = f"Memory allocation for '{var_name}' without NULL check"
+        
+        source_step = PathStep(
+            location=CodeLocation(file_path, alloc_info['line'], alloc_info['line']),
+            description=source_description,
+            node_type='source',
+            variable=var_name,
+            function_name=None
+        )
+        
+        # Create sink step (where null pointer is dereferenced)
+        sink_step = PathStep(
+            location=CodeLocation(file_path, line_number, line_number),
+            description=f"Null pointer dereference of '{var_name}'",
+            node_type='sink',
+            variable=var_name,
+            function_name=None
+        )
+        
+        # Create vulnerability path
+        vuln_path = VulnerabilityPath(
+            source=source_step,
+            sink=sink_step,
+            intermediate_steps=[],
+            sanitizers=[]
+        )
+        
+        return Vulnerability(
+            vuln_type=VulnerabilityType.NULL_POINTER_DEREF,
+            severity=Severity.HIGH,
+            location=CodeLocation(file_path, line_number, line_number),
+            description=f"Null pointer dereference: '{var_name}' dereferenced without NULL check",
+            evidence=evidence,
+            confidence=0.8,
+            cwe_id="CWE-476",
+            recommendation=f"Check if {var_name} is NULL before dereferencing",
+            path=vuln_path
+        )
     
     def _detect_double_free(self, file_path: str, lines: List[str]) -> List[Vulnerability]:
         """Detect double free vulnerabilities."""
@@ -309,9 +441,15 @@ class CMemoryChecker(BaseChecker):
             node_type='source', variable=var_name, function_name=None
         )
         
+        # Determine the correct free operation description
+        if allocation.allocation_type == 'new':
+            free_description = f"Memory freed: delete {var_name}"
+        else:
+            free_description = f"Memory freed: free({var_name})"
+        
         intermediate_step = PathStep(
             location=CodeLocation(file_path, allocation.freed_line, allocation.freed_line),
-            description=f"Memory freed: free({var_name})",
+            description=free_description,
             node_type='propagation', variable=var_name, function_name=None
         )
         
@@ -380,7 +518,7 @@ class CMemoryChecker(BaseChecker):
             
             if allocates_memory and not summary.cleanup_resources:
                 # Find callers of this function
-                callers = self._find_function_callers(func_key, functions)
+                callers = self.interprocedural_analyzer.get_functions_calling(func_key)
                 
                 for caller_key in callers:
                     caller_info = functions.get(caller_key)
@@ -516,15 +654,3 @@ class CMemoryChecker(BaseChecker):
         
         return vulnerabilities
     
-    def _find_function_callers(self, func_key: str, functions: Dict[str, Any]) -> List[str]:
-        """Find all functions that call the given function."""
-        callers = []
-        target_func = functions.get(func_key)
-        if not target_func:
-            return callers
-        
-        for caller_key, caller_info in functions.items():
-            if target_func.name in caller_info.calls:
-                callers.append(caller_key)
-        
-        return callers

@@ -9,7 +9,7 @@ from typing import Dict, List, Set, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .analyzer import FunctionInfo
+from .models import FunctionInfo
 
 
 class ParameterEffect(Enum):
