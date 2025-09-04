@@ -1,18 +1,11 @@
-"""Hybrid taint propagation analyzer combining static analysis and LLM.
-
-This module implements a hybrid approach where static analysis handles simple cases
-and LLM handles complex taint propagation scenarios.
-"""
+"""Hybrid taint propagation analyzer combining static analysis and LLM."""
 
 from typing import Dict, List, Set, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .summary import (
-    FunctionSummary, TaintPropagationType
-)
+from .summary import FunctionSummary, TaintPropagationType
 from .alias_analyzer import LightweightAliasAnalyzer
-# from .models import FunctionInfo
 
 
 class TaintComplexity(Enum):
@@ -35,10 +28,9 @@ class TaintPropagationResult:
 
 @dataclass
 class TaintPath:
-    """Represents a taint propagation path."""
     source_function: str
     sink_function: str
-    path: List[str]  # Function names in the path
+    path: List[str]
     confidence: float
     propagation_details: List[Dict[str, Any]] = field(default_factory=list)
     requires_llm_analysis: bool = False

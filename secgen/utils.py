@@ -1,7 +1,6 @@
 
 import ast
 import base64
-import importlib.util
 import inspect
 import json
 import keyword
@@ -10,32 +9,11 @@ import re
 import time
 from functools import lru_cache
 from io import BytesIO
-from pathlib import Path
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 
 __all__ = ["AgentError"]
-
-
-@lru_cache
-def _is_package_available(package_name: str) -> bool:
-    return importlib.util.find_spec(package_name) is not None
-
-
-BASE_BUILTIN_MODULES = [
-    "collections",
-    "datetime",
-    "itertools",
-    "math",
-    "queue",
-    "random",
-    "re",
-    "stat",
-    "statistics",
-    "time",
-    "unicodedata",
-]
 
 
 def escape_code_brackets(text: str) -> str:
@@ -52,8 +30,6 @@ def escape_code_brackets(text: str) -> str:
 
 
 class AgentError(Exception):
-    """Base class for other agent-related exceptions"""
-
     def __init__(self, message, logger: "AgentLogger"):
         super().__init__(message)
         self.message = message
@@ -64,52 +40,36 @@ class AgentError(Exception):
 
 
 class AgentParsingError(AgentError):
-    """Exception raised for errors in parsing in the agent"""
-
     pass
 
 
 class AgentExecutionError(AgentError):
-    """Exception raised for errors in execution in the agent"""
-
     pass
 
 
 class AgentMaxStepsError(AgentError):
-    """Exception raised for errors in execution in the agent"""
-
     pass
 
 
 class AgentToolCallError(AgentExecutionError):
-    """Exception raised for errors when incorrect arguments are passed to the tool"""
-
     pass
 
 
 class AgentToolExecutionError(AgentExecutionError):
-    """Exception raised for errors when executing a tool"""
-
     pass
 
 
 class AgentGenerationError(AgentError):
-    """Exception raised for errors in generation in the agent"""
-
     pass
 
 
 def make_json_serializable(obj: Any) -> Any:
-    """Recursive function to make objects JSON serializable"""
     if obj is None:
         return None
     elif isinstance(obj, (str, int, float, bool)):
-        # Try to parse string as JSON if it looks like a JSON object/array
-        if isinstance(obj, str):
+        if isinstance(obj, str) and ((obj.startswith("{") and obj.endswith("}")) or (obj.startswith("[") and obj.endswith("]"))):
             try:
-                if (obj.startswith("{") and obj.endswith("}")) or (obj.startswith("[") and obj.endswith("]")):
-                    parsed = json.loads(obj)
-                    return make_json_serializable(parsed)
+                return make_json_serializable(json.loads(obj))
             except json.JSONDecodeError:
                 pass
         return obj
@@ -118,113 +78,60 @@ def make_json_serializable(obj: Any) -> Any:
     elif isinstance(obj, dict):
         return {str(k): make_json_serializable(v) for k, v in obj.items()}
     elif hasattr(obj, "__dict__"):
-        # For custom objects, convert their __dict__ to a serializable format
         return {"_type": obj.__class__.__name__, **{k: make_json_serializable(v) for k, v in obj.__dict__.items()}}
     else:
-        # For any other type, convert to string
         return str(obj)
 
 
 def parse_json_blob(json_blob: str) -> tuple[dict[str, str], str]:
-    "Extracts the JSON blob from the input and returns the JSON data and the rest of the input."
     try:
-        first_accolade_index = json_blob.find("{")
-        last_accolade_index = [a.start() for a in list(re.finditer("}", json_blob))][-1]
-        json_str = json_blob[first_accolade_index : last_accolade_index + 1]
-        json_data = json.loads(json_str, strict=False)
-        return json_data, json_blob[:first_accolade_index]
+        start = json_blob.find("{")
+        end = [m.start() for m in re.finditer("}", json_blob)][-1]
+        json_str = json_blob[start:end + 1]
+        return json.loads(json_str, strict=False), json_blob[:start]
     except IndexError:
         raise ValueError("The model output does not contain any JSON blob.")
     except json.JSONDecodeError as e:
-        place = e.pos
-        if json_blob[place - 1 : place + 2] == "},\n":
-            raise ValueError(
-                "JSON is invalid: you probably tried to provide multiple tool calls in one action. PROVIDE ONLY ONE TOOL CALL."
-            )
-        raise ValueError(
-            f"The JSON blob you used is invalid due to the following error: {e}.\n"
-            f"JSON blob was: {json_blob}, decoding failed on that specific part of the blob:\n"
-            f"'{json_blob[place - 4 : place + 5]}'."
-        )
+        if json_blob[e.pos - 1:e.pos + 2] == "},\n":
+            raise ValueError("JSON is invalid: you probably tried to provide multiple tool calls in one action. PROVIDE ONLY ONE TOOL CALL.")
+        raise ValueError(f"The JSON blob you used is invalid due to the following error: {e}.\nJSON blob was: {json_blob}, decoding failed on that specific part of the blob:\n'{json_blob[e.pos - 4:e.pos + 5]}'.")
 
 
 def extract_code_from_text(text: str, code_block_tags: tuple[str, str]) -> str | None:
-    """Extract code from the LLM's output."""
     pattern = rf"{code_block_tags[0]}(.*?){code_block_tags[1]}"
     matches = re.findall(pattern, text, re.DOTALL)
-    if matches:
-        return "\n\n".join(match.strip() for match in matches)
-    return None
+    return "\n\n".join(match.strip() for match in matches) if matches else None
 
 
 def parse_code_blobs(text: str, code_block_tags: tuple[str, str]) -> str:
-    """Extract code blocs from the LLM's output.
-
-    If a valid code block is passed, it returns it directly.
-
-    Args:
-        text (`str`): LLM's output text to parse.
-
-    Returns:
-        `str`: Extracted code block.
-
-    Raises:
-        ValueError: If no valid code block is found in the text.
-    """
     matches = extract_code_from_text(text, code_block_tags)
-    if not matches:  # Fallback to markdown pattern
+    if not matches:
         matches = extract_code_from_text(text, ("```(?:python|py)", "\n```"))
     if matches:
         return matches
-    # Maybe the LLM outputted a code blob directly
+    
     try:
         ast.parse(text)
         return text
     except SyntaxError:
         pass
 
+    error_msg = f"Your code snippet is invalid, because the regex pattern {code_block_tags[0]}(.*?){code_block_tags[1]} was not found in it.\nHere is your code snippet:\n{text}"
     if "final" in text and "answer" in text:
-        raise ValueError(
-            dedent(
-                f"""
-                Your code snippet is invalid, because the regex pattern {code_block_tags[0]}(.*?){code_block_tags[1]} was not found in it.
-                Here is your code snippet:
-                {text}
-                It seems like you're trying to return the final answer, you can do it as follows:
-                {code_block_tags[0]}
-                final_answer("YOUR FINAL ANSWER HERE")
-                {code_block_tags[1]}
-                """
-            ).strip()
-        )
-    raise ValueError(
-        dedent(
-            f"""
-            Your code snippet is invalid, because the regex pattern {code_block_tags[0]}(.*?){code_block_tags[1]} was not found in it.
-            Here is your code snippet:
-            {text}
-            Make sure to include code with the correct pattern, for instance:
-            Thoughts: Your thoughts
-            {code_block_tags[0]}
-            # Your python code here
-            {code_block_tags[1]}
-            """
-        ).strip()
-    )
+        error_msg += f"\nIt seems like you're trying to return the final answer, you can do it as follows:\n{code_block_tags[0]}\nfinal_answer(\"YOUR FINAL ANSWER HERE\")\n{code_block_tags[1]}"
+    else:
+        error_msg += f"\nMake sure to include code with the correct pattern, for instance:\nThoughts: Your thoughts\n{code_block_tags[0]}\n# Your python code here\n{code_block_tags[1]}"
+    raise ValueError(error_msg)
 
 
-MAX_LENGTH_TRUNCATE_CONTENT = 20000
-
-
-def truncate_content(content: str, max_length: int = MAX_LENGTH_TRUNCATE_CONTENT) -> str:
+def truncate_content(content: str, max_length: int = 20000) -> str:
     if len(content) <= max_length:
         return content
-    else:
-        return (
-            content[: max_length // 2]
-            + f"\n..._This content has been truncated to stay below {max_length} characters_...\n"
-            + content[-max_length // 2 :]
-        )
+    return (
+        content[:max_length // 2]
+        + f"\n..._This content has been truncated to stay below {max_length} characters_...\n"
+        + content[-max_length // 2:]
+    )
 
 
 class ImportFinder(ast.NodeVisitor):
@@ -245,93 +152,62 @@ class ImportFinder(ast.NodeVisitor):
 
 
 def instance_to_source(instance, base_cls=None):
-    """Convert an instance to its class source code representation."""
     cls = instance.__class__
     class_name = cls.__name__
-
-    # Start building class lines
-    class_lines = []
-    if base_cls:
-        class_lines.append(f"class {class_name}({base_cls.__name__}):")
-    else:
-        class_lines.append(f"class {class_name}:")
-
-    # Add docstring if it exists and differs from base
+    
+    class_lines = [f"class {class_name}({base_cls.__name__}):" if base_cls else f"class {class_name}:"]
+    
     if cls.__doc__ and (not base_cls or cls.__doc__ != base_cls.__doc__):
         class_lines.append(f'    """{cls.__doc__}"""')
-
-    # Add class-level attributes
+    
     class_attrs = {
-        name: value
-        for name, value in cls.__dict__.items()
-        if not name.startswith("__")
-        and not name == "_abc_impl"
-        and not callable(value)
+        name: value for name, value in cls.__dict__.items()
+        if not name.startswith("__") and not name == "_abc_impl" and not callable(value)
         and not (base_cls and hasattr(base_cls, name) and getattr(base_cls, name) == value)
     }
-
+    
     for name, value in class_attrs.items():
         if isinstance(value, str):
-            # multiline value
             if "\n" in value:
-                escaped_value = value.replace('"""', r"\"\"\"")  # Escape triple quotes
+                escaped_value = value.replace('"""', r"\"\"\"")
                 class_lines.append(f'    {name} = """{escaped_value}"""')
             else:
                 class_lines.append(f"    {name} = {json.dumps(value)}")
         else:
             class_lines.append(f"    {name} = {repr(value)}")
-
+    
     if class_attrs:
         class_lines.append("")
-
-    # Add methods
+    
     methods = {
         name: func.__wrapped__ if hasattr(func, "__wrapped__") else func
         for name, func in cls.__dict__.items()
-        if callable(func)
-        and (
-            not base_cls
-            or not hasattr(base_cls, name)
-            or (
-                isinstance(func, (staticmethod, classmethod))
-                or (getattr(base_cls, name).__code__.co_code != func.__code__.co_code)
-            )
-        )
+        if callable(func) and (not base_cls or not hasattr(base_cls, name) or 
+            isinstance(func, (staticmethod, classmethod)) or 
+            getattr(base_cls, name).__code__.co_code != func.__code__.co_code)
     }
-
+    
     for name, method in methods.items():
         method_source = get_source(method)
-        # Clean up the indentation
         method_lines = method_source.split("\n")
-        first_line = method_lines[0]
-        indent = len(first_line) - len(first_line.lstrip())
+        indent = len(method_lines[0]) - len(method_lines[0].lstrip())
         method_lines = [line[indent:] for line in method_lines]
         method_source = "\n".join(["    " + line if line.strip() else line for line in method_lines])
         class_lines.append(method_source)
         class_lines.append("")
-
-    # Find required imports using ImportFinder
+    
     import_finder = ImportFinder()
     import_finder.visit(ast.parse("\n".join(class_lines)))
-    required_imports = import_finder.packages
-
-    # Build final code with imports
+    
     final_lines = []
-
-    # Add base class import if needed
     if base_cls:
         final_lines.append(f"from {base_cls.__module__} import {base_cls.__name__}")
-
-    # Add discovered imports
-    for package in required_imports:
+    for package in import_finder.packages:
         final_lines.append(f"import {package}")
-
-    if final_lines:  # Add empty line after imports
+    if final_lines:
         final_lines.append("")
-
-    # Add the class code
     final_lines.extend(class_lines)
-
+    
     return "\n".join(final_lines)
 
 

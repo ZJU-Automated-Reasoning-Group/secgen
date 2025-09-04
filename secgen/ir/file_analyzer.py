@@ -1,46 +1,34 @@
-"""Enhanced file analyzer using tree-sitter for improved code parsing."""
+"""File analyzer using tree-sitter for code parsing."""
 
 import os
 import ast
+import json
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any
+from typing import Dict, List, Optional, Any
 
 from secgen.core.models import FunctionInfo
 from secgen.tsanalyzer.symbol_analyzer import CppSymbolAnalyzer
 
 
 class FileAnalyzer:
-    """Enhanced file analyzer using tree-sitter for improved code parsing."""
+    """File analyzer using tree-sitter for code parsing."""
     
     def __init__(self, logger=None):
-        """Initialize enhanced file analyzer.
-        
-        Args:
-            logger: Logger instance
-        """
         self.logger = logger
         self.cpp_analyzer = CppSymbolAnalyzer()
         self.analysis_cache: Dict[str, Dict[str, Any]] = {}
         
-        # File extensions supported by different analyzers
-        self.cpp_extensions = {'.c', '.cpp', '.cxx', '.cc', '.h', '.hpp', '.hxx'}
-        self.python_extensions = {'.py', '.pyw'}
-        self.java_extensions = {'.java'}
-        self.javascript_extensions = {'.js', '.ts', '.jsx', '.tsx'}
+        self.extensions = {
+            'cpp': {'.c', '.cpp', '.cxx', '.cc', '.h', '.hpp', '.hxx'},
+            'python': {'.py', '.pyw'},
+            'java': {'.java'},
+            'javascript': {'.js', '.ts', '.jsx', '.tsx'}
+        }
         
     def analyze_directory(self, directory: str, extensions: List[str] = None) -> Dict[str, Any]:
-        """Analyze all files in a directory using enhanced tree-sitter analysis.
-        
-        Args:
-            directory: Path to directory to analyze
-            extensions: File extensions to analyze (default: all supported)
-            
-        Returns:
-            Analysis results dictionary with enhanced function information
-        """
+        """Analyze all files in a directory."""
         if extensions is None:
-            extensions = list(self.cpp_extensions | self.python_extensions | 
-                            self.java_extensions | self.javascript_extensions)
+            extensions = [ext for ext_set in self.extensions.values() for ext in ext_set]
             
         results = {
             'files_analyzed': [],
@@ -51,18 +39,14 @@ class FileAnalyzer:
             'statistics': {}
         }
         
-        # Find all relevant files
-        files_to_analyze = []
-        for root, _, files in os.walk(directory):
-            for file in files:
-                file_path = os.path.join(root, file)
-                if any(file.endswith(ext) for ext in extensions):
-                    files_to_analyze.append(file_path)
+        # Find and analyze files
+        files_to_analyze = [
+            os.path.join(root, file) for root, _, files in os.walk(directory)
+            for file in files if any(file.endswith(ext) for ext in extensions)
+        ]
         
-        if self.logger:
-            self.logger.log(f"Found {len(files_to_analyze)} files to analyze")
+        self._log(f"Found {len(files_to_analyze)} files to analyze")
         
-        # Analyze each file
         for file_path in files_to_analyze:
             try:
                 file_results = self.analyze_file(file_path)
@@ -72,61 +56,47 @@ class FileAnalyzer:
                     results['symbols'][file_path] = file_results.get('symbol_table', {})
                     results['memory_operations'][file_path] = file_results.get('memory_operations', [])
                     results['function_calls'][file_path] = file_results.get('function_calls', [])
-                    
             except Exception as e:
-                if self.logger:
-                    self.logger.log(f"Error analyzing {file_path}: {e}", level="ERROR")
+                self._log(f"Error analyzing {file_path}: {e}", "ERROR")
         
-        # Calculate statistics
         results['statistics'] = self._calculate_statistics(results)
-        
-        if self.logger:
-            self.logger.log(f"Analysis complete. Found {len(results['functions'])} functions across {len(results['files_analyzed'])} files")
+        self._log(f"Analysis complete. Found {len(results['functions'])} functions across {len(results['files_analyzed'])} files")
         
         return results
     
     def analyze_file(self, file_path: str) -> Dict[str, Any]:
-        """Analyze a single file using enhanced tree-sitter analysis.
-        
-        Args:
-            file_path: Path to file to analyze
-            
-        Returns:
-            Analysis results dictionary
-        """
+        """Analyze a single file."""
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
         except Exception as e:
-            if self.logger:
-                self.logger.log(f"Error reading file {file_path}: {e}", level="ERROR")
+            self._log(f"Error reading file {file_path}: {e}", "ERROR")
             return {}
         
-        # Check cache first
         if file_path in self.analysis_cache:
             return self.analysis_cache[file_path]
         
-        # Determine file type and use appropriate analyzer
         file_ext = Path(file_path).suffix.lower()
         
-        if file_ext in self.cpp_extensions:
-            return self._analyze_cpp_file(file_path, content)
-        elif file_ext in self.python_extensions:
-            return self._analyze_python_file(file_path, content)
-        elif file_ext in self.java_extensions:
-            return self._analyze_java_file(file_path, content)
-        elif file_ext in self.javascript_extensions:
-            return self._analyze_javascript_file(file_path, content)
-        else:
-            return self._analyze_generic_file(file_path, content)
+        # Route to appropriate analyzer
+        analyzers = {
+            'cpp': self._analyze_cpp_file,
+            'python': self._analyze_python_file,
+            'java': self._analyze_java_file,
+            'javascript': self._analyze_javascript_file
+        }
+        
+        for lang, ext_set in self.extensions.items():
+            if file_ext in ext_set:
+                return analyzers[lang](file_path, content)
+        
+        return {'functions': {}}
     
     def _analyze_cpp_file(self, file_path: str, content: str) -> Dict[str, Any]:
-        """Analyze C/C++ file using enhanced tree-sitter analysis."""
+        """Analyze C/C++ file using tree-sitter."""
         try:
-            # Use enhanced C++ analyzer
             analysis_results = self.cpp_analyzer.analyze_file(content, file_path)
             
-            # Convert to standard format
             results = {
                 'functions': {},
                 'symbol_table': analysis_results.get('symbol_table', {}),
@@ -136,8 +106,7 @@ class FileAnalyzer:
             }
             
             # Convert function info to standard format
-            functions = analysis_results.get('functions', [])
-            for func in functions:
+            for func in analysis_results.get('functions', []):
                 func_key = f"{file_path}:{func.name}"
                 results['functions'][func_key] = FunctionInfo(
                     name=func.name,
@@ -147,14 +116,11 @@ class FileAnalyzer:
                     parameters=func.parameters
                 )
             
-            # Cache results
             self.analysis_cache[file_path] = results
-            
             return results
             
         except Exception as e:
-            if self.logger:
-                self.logger.log(f"Error analyzing C/C++ file {file_path}: {e}", level="ERROR")
+            self._log(f"Error analyzing C/C++ file {file_path}: {e}", "ERROR")
             return {}
     
     def _analyze_python_file(self, file_path: str, content: str) -> Dict[str, Any]:
@@ -163,8 +129,6 @@ class FileAnalyzer:
         
         try:
             tree = ast.parse(content)
-            
-            # Extract functions
             for node in ast.walk(tree):
                 if isinstance(node, ast.FunctionDef):
                     func_info = FunctionInfo(
@@ -178,33 +142,22 @@ class FileAnalyzer:
                     # Extract function calls
                     for child in ast.walk(node):
                         if isinstance(child, ast.Call):
-                            if isinstance(child.func, ast.Name):
-                                func_info.calls.append(child.func.id)
-                            elif isinstance(child.func, ast.Attribute):
-                                func_info.calls.append(child.func.attr)
+                            call_name = child.func.id if isinstance(child.func, ast.Name) else child.func.attr
+                            func_info.calls.append(call_name)
                     
                     results['functions'][f"{file_path}:{node.name}"] = func_info
                     
         except SyntaxError as e:
-            if self.logger:
-                self.logger.log(f"Syntax error in {file_path}: {e}", level="ERROR")
+            self._log(f"Syntax error in {file_path}: {e}", "ERROR")
         
         return results
     
     def _analyze_java_file(self, file_path: str, content: str) -> Dict[str, Any]:
-        """Analyze Java file (simplified implementation)."""
-        # This would need a Java-specific tree-sitter analyzer
-        # For now, return basic results
+        """Analyze Java file (placeholder)."""
         return {'functions': {}}
     
     def _analyze_javascript_file(self, file_path: str, content: str) -> Dict[str, Any]:
-        """Analyze JavaScript/TypeScript file (simplified implementation)."""
-        # This would need a JavaScript/TypeScript-specific tree-sitter analyzer
-        # For now, return basic results
-        return {'functions': {}}
-    
-    def _analyze_generic_file(self, file_path: str, content: str) -> Dict[str, Any]:
-        """Generic file analysis for unsupported languages."""
+        """Analyze JavaScript/TypeScript file (placeholder)."""
         return {'functions': {}}
     
     def _calculate_statistics(self, results: Dict[str, Any]) -> Dict[str, Any]:
@@ -212,23 +165,14 @@ class FileAnalyzer:
         total_functions = len(results['functions'])
         total_files = len(results['files_analyzed'])
         
-        # Count functions by file
+        # Count by file
         functions_by_file = {}
-        for func_key, func_info in results['functions'].items():
+        for func_info in results['functions'].values():
             file_path = func_info.file_path
-            if file_path not in functions_by_file:
-                functions_by_file[file_path] = 0
-            functions_by_file[file_path] += 1
+            functions_by_file[file_path] = functions_by_file.get(file_path, 0) + 1
         
-        # Count memory operations by file
-        memory_ops_by_file = {}
-        for file_path, operations in results['memory_operations'].items():
-            memory_ops_by_file[file_path] = len(operations)
-        
-        # Count function calls by file
-        calls_by_file = {}
-        for file_path, calls in results['function_calls'].items():
-            calls_by_file[file_path] = len(calls)
+        memory_ops_by_file = {fp: len(ops) for fp, ops in results['memory_operations'].items()}
+        calls_by_file = {fp: len(calls) for fp, calls in results['function_calls'].items()}
         
         return {
             'total_functions': total_functions,
@@ -240,19 +184,14 @@ class FileAnalyzer:
         }
     
     def get_function_by_name(self, function_name: str, results: Dict[str, Any]) -> Optional[FunctionInfo]:
-        """Get function information by name from analysis results."""
-        for func_key, func_info in results['functions'].items():
-            if func_info.name == function_name:
-                return func_info
-        return None
+        """Get function information by name."""
+        return next((func_info for func_info in results['functions'].values() 
+                    if func_info.name == function_name), None)
     
     def get_functions_in_file(self, file_path: str, results: Dict[str, Any]) -> List[FunctionInfo]:
         """Get all functions in a specific file."""
-        functions = []
-        for func_key, func_info in results['functions'].items():
-            if func_info.file_path == file_path:
-                functions.append(func_info)
-        return functions
+        return [func_info for func_info in results['functions'].values() 
+                if func_info.file_path == file_path]
     
     def get_memory_operations_in_file(self, file_path: str, results: Dict[str, Any]) -> List[Any]:
         """Get all memory operations in a specific file."""

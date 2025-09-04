@@ -6,8 +6,8 @@ and specialized LLM tools.
 """
 
 from typing import Dict, List
-from .interprocedural_analyzer import InterproceduralAnalyzer
-from .models import FunctionInfo
+from secgen.core.interprocedural_analyzer import InterproceduralAnalyzer
+from secgen.core.models import FunctionInfo
 
 
 def example_usage():
@@ -154,8 +154,8 @@ void execute_command(char *command) {
 def demonstrate_alias_analysis():
     """Demonstrate the lightweight alias analysis."""
     
-    from .alias_analyzer import LightweightAliasAnalyzer
-    from .models import FunctionInfo
+    from secgen.core.alias_analyzer import LightweightAliasAnalyzer
+    from secgen.core.models import FunctionInfo
     
     # Create analyzer
     analyzer = LightweightAliasAnalyzer()
@@ -194,8 +194,8 @@ void example_function(char *ptr1, char *ptr2) {
 def demonstrate_summary():
     """Demonstrate the function summary."""
     
-    from .summary import FunctionSummary, ParameterSummary
-    from .summary import TaintPropagationType, SideEffectType, SideEffect
+    from secgen.core.summary import FunctionSummary, ParameterSummary
+    from secgen.core.summary import TaintPropagationType, SideEffectType, SideEffect
     
     # Create a summary
     param1 = ParameterSummary(

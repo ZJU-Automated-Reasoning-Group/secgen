@@ -56,28 +56,6 @@ class CallGraphEdge:
     call_sites: List[CallSite] = field(default_factory=list)
 
 
-@dataclass
-class DataFlowGraphNode:
-    """Node in data flow graph."""
-    node_id: str
-    node_type: str  # 'source', 'sink', 'sanitizer', 'normal'
-    line_number: int
-    file_path: str
-    content: str
-    variables: Set[str] = field(default_factory=set)
-    taint_status: str = 'unknown'
-
-
-@dataclass
-class DataFlowGraphEdge:
-    """Edge in data flow graph."""
-    source: str
-    target: str
-    edge_type: str  # 'data_flow', 'control_flow', 'call'
-    variables: Set[str] = field(default_factory=set)
-
-
-@dataclass
 class IRMetrics:
     """Metrics for IR graphs."""
     num_nodes: int
@@ -87,7 +65,7 @@ class IRMetrics:
     strongly_connected_components: int
     entry_points: List[str]
     leaf_nodes: List[str]
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
         return {

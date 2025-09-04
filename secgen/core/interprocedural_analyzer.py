@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from .summary import FunctionSummary
 from .alias_analyzer import LightweightAliasAnalyzer
 from .hybrid_taint_analyzer import HybridTaintAnalyzer, TaintPath, TaintPropagationResult
-from .llm_tools import LLMToolsManager, TaintAnalysisInput, PathAnalysisInput
+from .llm_tools import LLMToolsManager, AnalysisInput, PathAnalysisInput
 from .models import FunctionInfo, Vulnerability, VulnerabilityType, Severity, CodeLocation
-from secgen.ir import CallGraphBuilder, DataFlowGraphBuilder
+from secgen.ir import CallGraphBuilder
 
 
 @dataclass
@@ -48,7 +48,6 @@ class InterproceduralAnalyzer:
         # Analysis components
         self.alias_analyzer = LightweightAliasAnalyzer(logger)
         self.call_graph_builder = CallGraphBuilder(logger)
-        self.data_flow_builder = DataFlowGraphBuilder(logger)
         
         # LLM tools
         self.llm_tools_manager = LLMToolsManager(model, logger) if model else None

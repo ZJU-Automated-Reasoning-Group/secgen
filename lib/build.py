@@ -7,7 +7,7 @@ cwd = Path(__file__).resolve().parent.absolute()
 # Clone tree-sitter language repositories if necessary
 languages = {
     "tree-sitter-c": "https://github.com/tree-sitter/tree-sitter-c.git",
-    "tree-sitter-python": "https://github.com/tree-sitter/tree-sitter-python.git",
+   # "tree-sitter-python": "https://github.com/tree-sitter/tree-sitter-python.git",
 }
 
 for lang_name, repo_url in languages.items():
@@ -25,7 +25,7 @@ Language.build_library(
     # Include the languages we need
     [
         str(cwd / "vendor/tree-sitter-c"),
-        str(cwd / "vendor/tree-sitter-python"),
+       # str(cwd / "vendor/tree-sitter-python"),
     ],
 )
 

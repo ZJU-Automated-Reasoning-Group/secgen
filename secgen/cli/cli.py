@@ -8,7 +8,7 @@ from typing import List, Optional
 
 from secgen.core.models import VulnerabilityType
 from secgen.agent.models import OpenAIServerModel
-from secgen.checker import VulnerabilityDetector, AnalysisReport
+from secgen.checker import AnalysisReport
 from secgen.reports.report_process import convert_severity, convert_vuln_types, format_output, list_vulnerability_types
 from secgen.agent.minotor import AgentLogger, LogLevel
 

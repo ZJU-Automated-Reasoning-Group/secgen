@@ -1,6 +1,6 @@
 import json
 from typing import List
-from secgen.checker import VulnerabilityDetector, AnalysisReport
+from secgen.checker import AnalysisReport
 from secgen.core.models import Severity, VulnerabilityType
 
 
@@ -14,7 +14,7 @@ def convert_vuln_types(type_strings: List[str]) -> set:
     return {vt for type_str in type_strings for vt in VulnerabilityType if vt.value == type_str}
 
 
-def format_output(report: AnalysisReport, detector: VulnerabilityDetector, format_type: str) -> str:
+def format_output(report: AnalysisReport, detector: "VulnerabilityDetector", format_type: str) -> str:
     """Format analysis report based on format type."""
     if format_type == "json":
         return json.dumps(detector.export_json_report(report), indent=2)
@@ -24,7 +24,7 @@ def format_output(report: AnalysisReport, detector: VulnerabilityDetector, forma
         return detector.generate_summary_report(report)
 
 
-def format_sarif_output(report: AnalysisReport, detector: VulnerabilityDetector) -> str:
+def format_sarif_output(report: AnalysisReport, detector: "VulnerabilityDetector") -> str:
     """Format analysis report as SARIF."""
     sarif_report = {
         "version": "2.1.0",

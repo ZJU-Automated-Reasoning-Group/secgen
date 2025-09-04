@@ -118,11 +118,11 @@ class CallGraphBuilder:
         
         return reachability
     
-    def get_call_graph_metrics(self) -> IRMetrics:
+    def get_call_graph_metrics(self) -> Dict[str, Any]:
         """Get metrics about the call graph.
         
         Returns:
-            IRMetrics object with call graph metrics
+            A data class "IRMetrics" with call graph metrics
         """
         if not self.call_graph:
             return IRMetrics(
@@ -143,15 +143,23 @@ class CallGraphBuilder:
         leaf_nodes = [node for node in self.call_graph.nodes() 
                      if self.call_graph.out_degree(node) == 0]
         
+        num_nodes=self.call_graph.number_of_nodes(),
+        num_edges=self.call_graph.number_of_edges(),
+        max_depth=self._calculate_max_depth(),
+        cyclic_dependencies=list(nx.simple_cycles(self.call_graph)),
+        strongly_connected_components=len(list(nx.strongly_connected_components(self.call_graph))),
+        entry_points=entry_points,
+        leaf_nodes=leaf_nodes
         return IRMetrics(
-            num_nodes=self.call_graph.number_of_nodes(),
-            num_edges=self.call_graph.number_of_edges(),
-            max_depth=self._calculate_max_depth(),
-            cyclic_dependencies=list(nx.simple_cycles(self.call_graph)),
-            strongly_connected_components=len(list(nx.strongly_connected_components(self.call_graph))),
+            num_nodes=num_nodes,
+            num_edges=num_edges,
+            max_depth=max_depth,
+            cyclic_dependencies=cyclic_dependencies,
+            strongly_connected_components=strongly_connected_components,
             entry_points=entry_points,
             leaf_nodes=leaf_nodes
         )
+
     
     def _calculate_max_depth(self) -> int:
         """Calculate maximum call depth in the call graph."""
