@@ -145,9 +145,14 @@ class FunctionInfo:
     return_type: Optional[str] = None
     calls: List[str] = None
     variables: List[str] = None
+    called_by: List[str] = None
+    is_exported: bool = False
+    is_static: bool = False
     
     def __post_init__(self):
         if self.calls is None:
             self.calls = []
         if self.variables is None:
             self.variables = []
+        if self.called_by is None:
+            self.called_by = []

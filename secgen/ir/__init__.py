@@ -10,10 +10,16 @@ from .models import (
     TaintPath,
     CallGraphNode,
     CallGraphEdge,
-    IRMetrics,
+    CallGraphMetrics,
+    BasicBlock,
+    CFGNode,
+    CFGEdge,
+    ControlFlowType,
+    CFGMetrics,
 )
 
 from .call_graph import CallGraphBuilder
+from .control_flow_graph import CFGBuilder
 
 __all__ = [
     # Models
@@ -21,6 +27,14 @@ __all__ = [
     'TaintPath',
     'CallGraphNode',
     'CallGraphEdge',
-    'IRMetrics',# Builders
-    'CallGraphBuilder'
+    'CallGraphMetrics',
+    'BasicBlock',
+    'CFGNode',
+    'CFGEdge',
+    'ControlFlowType',
+    'CFGMetrics',
+    'ConcurrencyIssue',
+    # Builders
+    'CallGraphBuilder',
+    'CFGBuilder'
 ]

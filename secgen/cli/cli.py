@@ -20,11 +20,16 @@ def create_parser() -> argparse.ArgumentParser:
         epilog="""Examples:
   secgen-audit . --detectors uaf,npd,bof
   secgen-audit file.c -o report.json -f json
+  secgen-audit . --min-severity high --disable-memory
   secgen-audit . --min-severity high --disable-memory"""
     )
     
+    # Add subcommands
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    
     # Core arguments
-    parser.add_argument("project_path", help="Project directory or file to analyze")
+    parser.add_argument("project_path", nargs='?', help="Project directory or file to analyze")
     parser.add_argument("--extensions", nargs="+", default=[".py", ".c", ".cpp", ".h", ".hpp", ".java", ".js", ".ts"], help="File extensions to analyze")
     parser.add_argument("--exclude", nargs="+", default=["__pycache__", ".git", "node_modules", "vendor"], help="Patterns to exclude")
     parser.add_argument("--min-severity", choices=["info", "low", "medium", "high", "critical"], default="low", help="Minimum severity level")
@@ -124,6 +129,11 @@ async def main():
     parser = create_parser()
     args = parser.parse_args()
     
+    # Handle subcommands
+    if hasattr(args, 'func'):
+        args.func(args)
+        return 0
+    
     # Handle utility options
     if args.list_vuln_types:
         report_generator = ReportGenerator()
@@ -133,18 +143,25 @@ async def main():
     # Setup logging
     logger = setup_logging(args)
     
-    # Validate project path
-    project_path = Path(args.project_path)
-    if not project_path.exists():
-        logger.log(f"Error: Path does not exist: {project_path}", level=LogLevel.ERROR)
-        return 1
+    # Validate project path (only if not using subcommands)
+    if args.project_path:
+        project_path = Path(args.project_path)
+        if not project_path.exists():
+            logger.log(f"Error: Path does not exist: {project_path}", level=LogLevel.ERROR)
+            return 1
+    else:
+        project_path = None
     
-    is_single_file = project_path.is_file()
-    is_directory = project_path.is_dir()
-    
-    if not is_single_file and not is_directory:
-        logger.log(f"Error: Path is neither a file nor a directory: {project_path}", level=LogLevel.ERROR)
-        return 1
+    if project_path:
+        is_single_file = project_path.is_file()
+        is_directory = project_path.is_dir()
+        
+        if not is_single_file and not is_directory:
+            logger.log(f"Error: Path is neither a file nor a directory: {project_path}", level=LogLevel.ERROR)
+            return 1
+    else:
+        is_single_file = False
+        is_directory = False
     
     # Setup model if requested
     model = setup_model(args, logger)
@@ -170,80 +187,20 @@ async def main():
                 return 1
         
         # Perform analysis
-        if is_single_file:
+        if not project_path:
+            logger.log("Error: No project path specified and no subcommand used", level=LogLevel.ERROR)
+            return 1
+        elif is_single_file:
             logger.log(f"Starting analysis of single file: {project_path}")
             # report = detector.analyze_single_file(str(project_path), enabled_detectors)  # TODO: Implement single file analysis
             logger.log("Single file analysis not yet implemented", level=LogLevel.ERROR)
             return 1
         else:
             logger.log(f"Starting analysis of directory: {project_path}")
-            # Use ProjectAnalyzer for directory analysis
-            # from secgen.checker import ProjectAnalyzer  # TODO: Define ProjectAnalyzer class
-            # project_analyzer = ProjectAnalyzer(config=config, logger=logger, model=model)
-            # report = project_analyzer.analyze_directory(
-            #     str(project_path),
-            #     file_extensions=args.extensions,
-            #     exclude_patterns=args.exclude,
-            #     enabled_types=enabled_detectors
-            # )
+
             logger.log("Directory analysis not yet implemented", level=LogLevel.ERROR)
             return 1
-        
-        # Apply filters
-        report_generator = ReportGenerator()
-        min_severity = report_generator.convert_severity(args.min_severity)
-        
-        # Handle additional vulnerability type filtering
-        if args.vuln_types:
-            explicit_vuln_types = report_generator.convert_vuln_types(args.vuln_types)
-            if enabled_detectors:
-                vuln_types = list(set(enabled_detectors + explicit_vuln_types))
-            else:
-                vuln_types = explicit_vuln_types
-        else:
-            vuln_types = enabled_detectors
-        
-        # Filter vulnerabilities manually
-        filtered_vulnerabilities = []
-        for vuln in report.vulnerabilities:
-            # Apply severity filter
-            if hasattr(vuln, 'severity') and vuln.severity.value < min_severity.value:
-                continue
-            # Apply confidence filter
-            if hasattr(vuln, 'confidence') and vuln.confidence < args.min_confidence:
-                continue
-            # Apply vulnerability type filter
-            if vuln_types and hasattr(vuln, 'vuln_type') and vuln.vuln_type not in vuln_types:
-                continue
-            filtered_vulnerabilities.append(vuln)
-        
-        # Update report with filtered vulnerabilities
-        report.vulnerabilities = filtered_vulnerabilities
-        report.total_vulnerabilities = len(filtered_vulnerabilities)
-        
-        # Enhance with LLM if requested
-        if args.enable_llm_enhancement and model:
-            logger.log("LLM enhancement not yet implemented in CodeMetadataExtractor")
-            # TODO: Implement LLM enhancement
-        
-        # Format output
-        output = report_generator.format_output(report, detector, args.format)
-        
-        # Write output
-        if args.output:
-            with open(args.output, 'w') as f:
-                f.write(output)
-            logger.log(f"Results written to {args.output}")
-        else:
-            print(output)
-        
-        # Exit with appropriate code
-        if report.total_vulnerabilities > 0:
-            critical_count = report.vulnerabilities_by_severity.get('critical', 0)
-            high_count = report.vulnerabilities_by_severity.get('high', 0)
-            return 2 if critical_count > 0 else (1 if high_count > 0 else 0)
-        return 0
-        
+    
     except KeyboardInterrupt:
         logger.log("Analysis interrupted by user", level=LogLevel.ERROR)
         return 130

@@ -5,7 +5,7 @@ from typing import Dict, List, Set, Tuple, Optional, Any
 from collections import defaultdict
 
 from secgen.core.models import FunctionInfo
-from secgen.ir.models import CallSite, CallGraphNode, CallGraphEdge, IRMetrics
+from secgen.ir.models import CallSite, CallGraphNode, CallGraphEdge, CallGraphMetrics
 
 
 class CallGraphBuilder:
@@ -122,10 +122,10 @@ class CallGraphBuilder:
         """Get metrics about the call graph.
         
         Returns:
-            A data class "IRMetrics" with call graph metrics
+            A data class "CallGraphMetrics" with call graph metrics
         """
         if not self.call_graph:
-            return IRMetrics(
+            return CallGraphMetrics(
                 num_nodes=0,
                 num_edges=0,
                 max_depth=0,
@@ -143,19 +143,12 @@ class CallGraphBuilder:
         leaf_nodes = [node for node in self.call_graph.nodes() 
                      if self.call_graph.out_degree(node) == 0]
         
-        num_nodes=self.call_graph.number_of_nodes(),
-        num_edges=self.call_graph.number_of_edges(),
-        max_depth=self._calculate_max_depth(),
-        cyclic_dependencies=list(nx.simple_cycles(self.call_graph)),
-        strongly_connected_components=len(list(nx.strongly_connected_components(self.call_graph))),
-        entry_points=entry_points,
-        leaf_nodes=leaf_nodes
-        return IRMetrics(
-            num_nodes=num_nodes,
-            num_edges=num_edges,
-            max_depth=max_depth,
-            cyclic_dependencies=cyclic_dependencies,
-            strongly_connected_components=strongly_connected_components,
+        return CallGraphMetrics(
+            num_nodes=self.call_graph.number_of_nodes(),
+            num_edges=self.call_graph.number_of_edges(),
+            max_depth=self._calculate_max_depth(),
+            cyclic_dependencies=list(nx.simple_cycles(self.call_graph)),
+            strongly_connected_components=len(list(nx.strongly_connected_components(self.call_graph))),
             entry_points=entry_points,
             leaf_nodes=leaf_nodes
         )
