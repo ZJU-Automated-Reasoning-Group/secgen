@@ -1,8 +1,14 @@
 """Unified vulnerability detection system with consolidated architecture."""
 
-from secgen.checker.report_generator import AnalysisReport
+from secgen.checker.report_generator import AnalysisReport, ReportGenerator
+
+from secgen.checker.taint_flow_analyzer import TaintAnalyzer
+from secgen.checker.value_flow_analyzer import MemorySafetyAnalyzer
 
 
 __all__ = [
     'AnalysisReport',
+    'ReportGenerator',
+    'TaintAnalyzer',
+    'MemorySafetyAnalyzer'
 ]

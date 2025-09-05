@@ -9,6 +9,7 @@ import re
 import time
 from functools import lru_cache
 from io import BytesIO
+from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
@@ -273,6 +274,22 @@ def encode_image_base64(image):
 
 def make_image_url(base64_image):
     return f"data:image/png;base64,{base64_image}"
+
+
+def _is_package_available(package_name: str) -> bool:
+    """Check if a package is available for import.
+    
+    Args:
+        package_name: Name of the package to check
+        
+    Returns:
+        True if the package can be imported, False otherwise
+    """
+    try:
+        __import__(package_name)
+        return True
+    except ImportError:
+        return False
 
 
 def make_init_file(folder: str | Path):

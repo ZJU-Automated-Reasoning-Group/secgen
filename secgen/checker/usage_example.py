@@ -1,17 +1,17 @@
-"""Example usage of the interprocedural analyzer.
+"""Example usage of the interprocedural taint analysis.
 
-This module demonstrates how to use the interprocedural analyzer
+This module demonstrates how to use the interprocedural taint analysis
 with lightweight alias analysis, function summaries, hybrid taint propagation,
 and specialized LLM tools.
 """
 
 from typing import Dict, List
-from secgen.core.interprocedural_analyzer import InterproceduralAnalyzer
+from secgen.checker.taint_flow_analyzer import TaintAnalyzer
 from secgen.core.models import FunctionInfo
 
 
 def example_usage():
-    """Example of using the interprocedural analyzer."""
+    """Example of using the interprocedural taint analysis."""
     
     # Mock LLM model (in real usage, this would be an actual LLM model)
     class MockLLMModel:
@@ -33,7 +33,7 @@ def example_usage():
     
     # Initialize the analyzer
     model = MockLLMModel()
-    analyzer = InterproceduralAnalyzer(model=model, logger=None)
+    analyzer = TaintAnalyzer(model=model, logger=None)
     
     # Example function information
     functions = {
@@ -154,7 +154,7 @@ void execute_command(char *command) {
 def demonstrate_alias_analysis():
     """Demonstrate the lightweight alias analysis."""
     
-    from secgen.core.alias_analyzer import LightweightAliasAnalyzer
+    from secgen.alias.local_must_alias_analyzer import LightweightAliasAnalyzer
     from secgen.core.models import FunctionInfo
     
     # Create analyzer

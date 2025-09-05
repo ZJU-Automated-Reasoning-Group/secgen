@@ -9,7 +9,7 @@ from typing import List, Optional
 from secgen.core.models import VulnerabilityType
 from secgen.agent.models import OpenAIServerModel
 from secgen.checker import AnalysisReport
-from secgen.reports.report_process import convert_severity, convert_vuln_types, format_output, list_vulnerability_types
+from secgen.checker.report_generator import ReportGenerator
 from secgen.agent.minotor import AgentLogger, LogLevel
 
 
@@ -126,7 +126,8 @@ async def main():
     
     # Handle utility options
     if args.list_vuln_types:
-        list_vulnerability_types()
+        report_generator = ReportGenerator()
+        report_generator.list_vulnerability_types()
         return 0
     
     # Setup logging
@@ -156,7 +157,7 @@ async def main():
         'enable_llm_enhancement': args.enable_llm_enhancement
     }
     
-    detector = VulnerabilityDetector(config=config, logger=logger)
+    # detector = VulnerabilityDetector(config=config, logger=logger)  # TODO: Define VulnerabilityDetector class
     
     try:
         # Handle detector selection
@@ -171,25 +172,30 @@ async def main():
         # Perform analysis
         if is_single_file:
             logger.log(f"Starting analysis of single file: {project_path}")
-            report = detector.analyze_single_file(str(project_path), enabled_detectors)
+            # report = detector.analyze_single_file(str(project_path), enabled_detectors)  # TODO: Implement single file analysis
+            logger.log("Single file analysis not yet implemented", level=LogLevel.ERROR)
+            return 1
         else:
             logger.log(f"Starting analysis of directory: {project_path}")
             # Use ProjectAnalyzer for directory analysis
-            from secgen.checker import ProjectAnalyzer
-            project_analyzer = ProjectAnalyzer(config=config, logger=logger, model=model)
-            report = project_analyzer.analyze_directory(
-                str(project_path),
-                file_extensions=args.extensions,
-                exclude_patterns=args.exclude,
-                enabled_types=enabled_detectors
-            )
+            # from secgen.checker import ProjectAnalyzer  # TODO: Define ProjectAnalyzer class
+            # project_analyzer = ProjectAnalyzer(config=config, logger=logger, model=model)
+            # report = project_analyzer.analyze_directory(
+            #     str(project_path),
+            #     file_extensions=args.extensions,
+            #     exclude_patterns=args.exclude,
+            #     enabled_types=enabled_detectors
+            # )
+            logger.log("Directory analysis not yet implemented", level=LogLevel.ERROR)
+            return 1
         
         # Apply filters
-        min_severity = convert_severity(args.min_severity)
+        report_generator = ReportGenerator()
+        min_severity = report_generator.convert_severity(args.min_severity)
         
         # Handle additional vulnerability type filtering
         if args.vuln_types:
-            explicit_vuln_types = convert_vuln_types(args.vuln_types)
+            explicit_vuln_types = report_generator.convert_vuln_types(args.vuln_types)
             if enabled_detectors:
                 vuln_types = list(set(enabled_detectors + explicit_vuln_types))
             else:
@@ -217,11 +223,11 @@ async def main():
         
         # Enhance with LLM if requested
         if args.enable_llm_enhancement and model:
-            logger.log("LLM enhancement not yet implemented in FileAnalyzerCore")
+            logger.log("LLM enhancement not yet implemented in CodeMetadataExtractor")
             # TODO: Implement LLM enhancement
         
         # Format output
-        output = format_output(report, detector, args.format)
+        output = report_generator.format_output(report, detector, args.format)
         
         # Write output
         if args.output:

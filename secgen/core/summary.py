@@ -8,7 +8,7 @@ from typing import Dict, List, Set, Optional, Any, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .alias_analyzer import AliasRelation, AliasType
+from secgen.alias.local_must_alias_analyzer import AliasRelation, AliasType
 
 
 class TaintPropagationType(Enum):

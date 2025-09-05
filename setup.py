@@ -37,6 +37,7 @@ setup(
     entry_points={
         "console_scripts": [
             "secgen-audit=secgen.cli.cli:cli_main",
+            "secgen-alias=secgen.cli.alias:main",
         ],
     },
     keywords="security vulnerability analysis static-analysis code-quality audit",

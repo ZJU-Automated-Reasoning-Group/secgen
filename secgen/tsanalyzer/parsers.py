@@ -1,82 +1,33 @@
-"""Symbol analyzer with tree-sitter integration for code analysis."""
+"""Language-specific parsers and analyzers."""
 
 import tree_sitter
-from tree_sitter import Language, Parser
 from typing import Dict, List, Optional, Set, Any, Union
-from dataclasses import dataclass
-from pathlib import Path
+
+from .base import BaseTreeSitterAnalyzer
+from .models import SymbolInfo, VariableInfo, AssignmentInfo, AnalysisResult
 
 
-@dataclass
-class SymbolInfo:
-    """Information about symbols (functions, variables, calls)."""
-    name: str
-    symbol_type: str  # 'function', 'variable', 'call', 'memory_op'
-    line_number: int
-    byte_start: int
-    byte_end: int
-    node: tree_sitter.Node
-    # Optional fields
-    parameters: Optional[List[str]] = None
-    return_type: Optional[str] = None
-    arguments: Optional[List[str]] = None
-    caller_function: Optional[str] = None
-    operation_type: Optional[str] = None
-    target_variable: Optional[str] = None
-
-
-class SymbolAnalyzer:
+class SymbolAnalyzer(BaseTreeSitterAnalyzer):
     """Symbol analyzer using tree-sitter."""
     
-    def __init__(self, language_name: str):
-        self.language_name = language_name
-        self.parser = Parser()
-        self._setup_language()
-        
-        # Memory operation functions
-        self.allocation_funcs = {'malloc', 'calloc', 'realloc', 'new'}
-        self.deallocation_funcs = {'free', 'delete'}
-        self.dangerous_funcs = {'strcpy', 'strcat', 'sprintf', 'gets', 'scanf'}
-    
-    def _setup_language(self):
-        """Setup tree-sitter language."""
-        cwd = Path(__file__).resolve().parent.parent.parent.absolute()
-        language_path = cwd / "lib/build/my-languages.so"
-        
-        try:
-            if self.language_name.lower() in ["cpp", "c++"]:
-                self.language = Language(str(language_path), 'cpp')
-            elif self.language_name.lower() == "c":
-                self.language = Language(str(language_path), "c")
-            elif self.language_name.lower() == "python":
-                self.language = Language(str(language_path), "python")
-            else:
-                raise ValueError(f"Unsupported language: {self.language_name}")
-        except:
-            raise RuntimeError("Tree-sitter language not found. Please build the language bindings.")
-        
-        self.parser.set_language(self.language)
-    
-    def parse_file(self, source_code: str) -> tree_sitter.Tree:
-        """Parse source code and return the AST."""
-        return self.parser.parse(bytes(source_code, "utf8"))
-    
-    def analyze_file(self, source_code: str, file_path: str = "") -> Dict[str, Any]:
+    def analyze_file(self, source_code: str, file_path: str = "") -> AnalysisResult:
         """Comprehensive file analysis."""
-        tree = self.parse_file(source_code)
+        tree = self.parse_code(source_code)
         
         functions = self._extract_functions(tree, source_code)
         variables = self._extract_variables(tree, source_code)
         calls = self._extract_function_calls(tree, source_code)
         memory_ops = self._extract_memory_operations(tree, source_code)
+        assignments = self._extract_assignments(tree, source_code)
         
-        return {
-            'functions': functions,
-            'variables': variables,
-            'calls': calls,
-            'memory_operations': memory_ops,
-            'file_path': file_path
-        }
+        return AnalysisResult(
+            functions=functions,
+            variables=variables,
+            calls=calls,
+            memory_operations=memory_ops,
+            assignments=assignments,
+            file_path=file_path
+        )
     
     def _extract_functions(self, tree: tree_sitter.Tree, source_code: str) -> List[SymbolInfo]:
         """Extract function definitions."""
@@ -170,23 +121,89 @@ class SymbolAnalyzer:
         
         return memory_ops
     
+    def _extract_assignments(self, tree: tree_sitter.Tree, source_code: str) -> List[AssignmentInfo]:
+        """Extract assignment operations from the AST."""
+        assignments = []
+        
+        # Find all assignment expressions
+        for assign_node in self.find_nodes_by_type(tree.root_node, "assignment_expression"):
+            assignment_info = self._parse_assignment_node(assign_node, source_code)
+            if assignment_info:
+                assignments.append(assignment_info)
+        
+        # Find all init declarators (variable declarations with initialization)
+        for init_node in self.find_nodes_by_type(tree.root_node, "init_declarator"):
+            assignment_info = self._parse_init_declarator_node(init_node, source_code)
+            if assignment_info:
+                assignments.append(assignment_info)
+        
+        return assignments
+    
+    def _parse_assignment_node(self, assign_node: tree_sitter.Node, source_code: str) -> Optional[AssignmentInfo]:
+        """Parse an assignment expression node."""
+        if len(assign_node.children) < 3:  # Need at least: lhs, =, rhs
+            return None
+        
+        # Find the assignment operator
+        op_index = None
+        for i, child in enumerate(assign_node.children):
+            if child.type == "=":
+                op_index = i
+                break
+        
+        if op_index is None or op_index < 1 or op_index >= len(assign_node.children) - 1:
+            return None
+        
+        lhs_node = assign_node.children[op_index - 1]
+        rhs_node = assign_node.children[op_index + 1]
+        
+        lhs_name = self._extract_identifier_from_node(lhs_node, source_code)
+        rhs_name = self._extract_identifier_from_node(rhs_node, source_code)
+        
+        if not lhs_name or not rhs_name:
+            return None
+        
+        return AssignmentInfo(
+            lhs=lhs_name,
+            rhs=rhs_name,
+            assignment_type='assignment',
+            line_number=self.get_line_number(assign_node, source_code),
+            node=assign_node
+        )
+    
+    def _parse_init_declarator_node(self, init_node: tree_sitter.Node, source_code: str) -> Optional[AssignmentInfo]:
+        """Parse an init declarator node (variable declaration with initialization)."""
+        if len(init_node.children) < 3:  # Need at least: declarator, =, initializer
+            return None
+        
+        # Find the assignment operator
+        op_index = None
+        for i, child in enumerate(init_node.children):
+            if child.type == "=":
+                op_index = i
+                break
+        
+        if op_index is None or op_index < 1 or op_index >= len(init_node.children) - 1:
+            return None
+        
+        declarator_node = init_node.children[op_index - 1]
+        initializer_node = init_node.children[op_index + 1]
+        
+        lhs_name = self._extract_identifier_from_node(declarator_node, source_code)
+        rhs_name = self._extract_identifier_from_node(initializer_node, source_code)
+        
+        if not lhs_name or not rhs_name:
+            return None
+        
+        return AssignmentInfo(
+            lhs=lhs_name,
+            rhs=rhs_name,
+            assignment_type='init_declarator',
+            line_number=self.get_line_number(init_node, source_code),
+            node=init_node
+        )
+    
     # Helper methods
-    def _find_child_by_type(self, node: tree_sitter.Node, node_type: str) -> Optional[tree_sitter.Node]:
-        """Find first child of specific type."""
-        for child in node.children:
-            if child.type == node_type:
-                return child
-        return None
-    
-    def _extract_identifier(self, node: tree_sitter.Node, source_code: str) -> Optional[str]:
-        """Extract identifier from node."""
-        for child in node.children:
-            if child.type == "identifier":
-                return self.get_node_text(child, source_code)
-            elif child.type == "qualified_identifier":
-                return self.get_node_text(child, source_code).split("::")[-1]
-        return None
-    
     def _extract_return_type(self, func_node: tree_sitter.Node, source_code: str) -> Optional[str]:
         """Extract return type from function node."""
         for child in func_node.children:
@@ -235,16 +252,6 @@ class SymbolAnalyzer:
             current = current.parent
         return False
     
-    def _get_called_function_name(self, call_node: tree_sitter.Node, source_code: str) -> Optional[str]:
-        """Get function name from call expression."""
-        if call_node.children:
-            func_node = call_node.children[0]
-            if func_node.type == "identifier":
-                return self.get_node_text(func_node, source_code)
-            elif func_node.type == "field_expression":
-                return self._extract_identifier(func_node, source_code)
-        return None
-    
     def _extract_call_arguments(self, call_node: tree_sitter.Node, source_code: str) -> List[str]:
         """Extract arguments from function call."""
         arguments = []
@@ -275,17 +282,6 @@ class SymbolAnalyzer:
                         return self.get_node_text(arg_child, source_code)
         return None
     
-    def _get_symbol_scope(self, node: tree_sitter.Node, source_code: str) -> str:
-        """Get function scope of a symbol."""
-        current = node.parent
-        while current:
-            if current.type == 'function_definition':
-                func_declarator = self._find_child_by_type(current, 'function_declarator')
-                if func_declarator:
-                    return self._extract_identifier(func_declarator, source_code) or 'unknown'
-            current = current.parent
-        return 'global'
-    
     def _create_symbol_info(self, node: tree_sitter.Node, source_code: str, symbol_type: str, operation_type: str = None) -> SymbolInfo:
         """Create SymbolInfo from node."""
         return SymbolInfo(
@@ -297,29 +293,6 @@ class SymbolAnalyzer:
             node=node,
             operation_type=operation_type
         )
-    
-    # Utility methods
-    def get_line_number(self, node: tree_sitter.Node, source_code: str) -> int:
-        """Get line number for a node."""
-        return source_code[:node.start_byte].count('\n') + 1
-    
-    def get_node_text(self, node: tree_sitter.Node, source_code: str) -> str:
-        """Get text content of a node."""
-        return source_code[node.start_byte:node.end_byte]
-    
-    def find_nodes_by_type(self, root: tree_sitter.Node, node_type: Union[str, Set[str]]) -> List[tree_sitter.Node]:
-        """Find all nodes of specific type(s)."""
-        nodes = []
-        types = {node_type} if isinstance(node_type, str) else node_type
-        
-        def traverse(node):
-            if node.type in types:
-                nodes.append(node)
-            for child in node.children:
-                traverse(child)
-        
-        traverse(root)
-        return nodes
     
     # Analysis methods
     def get_dangerous_calls(self, calls: List[SymbolInfo]) -> List[SymbolInfo]:
@@ -345,3 +318,10 @@ class CppSymbolAnalyzer(SymbolAnalyzer):
     
     def __init__(self):
         super().__init__("cpp")
+
+
+class CSymbolAnalyzer(SymbolAnalyzer):
+    """Convenience class for C symbol analysis."""
+    
+    def __init__(self):
+        super().__init__("c")
